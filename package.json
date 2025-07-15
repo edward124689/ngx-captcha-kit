@@ -43,5 +43,13 @@
     "karma-jasmine-html-reporter": "~2.1.0",
     "ng-packagr": "^20.1.0",
     "typescript": "~5.8.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edward124689/ngx-captcha-kit"
+  },
+  "bugs": {
+    "url": "https://github.com/edward124689/ngx-captcha-kit/issues"
+  },
+  "homepage": "https://github.com/edward124689/ngx-captcha-kit#readme"
 }
