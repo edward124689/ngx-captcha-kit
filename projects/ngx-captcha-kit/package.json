@@ -27,5 +27,6 @@
     "angular-seo",
     "invisible-captcha",
     "multi-captcha"
-  ]
+  ],
+  "license": "MIT"
 }
