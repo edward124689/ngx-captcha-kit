@@ -1,4 +1,5 @@
 # ngx-captcha-kit
+[![npm version](https://badge.fury.io/js/ngx-captcha-kit.svg)](https://www.npmjs.com/package/ngx-captcha-kit) [![npm downloads](https://img.shields.io/npm/dm/ngx-captcha-kit.svg)](https://www.npmjs.com/package/ngx-captcha-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An Angular library that provides a unified integration for multiple CAPTCHA services in Angular applications. Supports Google reCAPTCHA v2 (Checkbox and Invisible) and v3, Cloudflare Turnstile, and Alibaba Cloud Captcha 2.0, with a modular architecture for easy expansion. This kit simplifies CAPTCHA implementation with a single component and service, ensuring compatibility with Angular 20+ features like Signals and zoneless change detection.
 

@@ -1,6 +1,6 @@
 {
   "name": "ngx-captcha-kit-workspace",
-  "version": "0.0.0",
+  "version": "20.0.0",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
@@ -51,5 +51,16 @@
   "bugs": {
     "url": "https://github.com/edward124689/ngx-captcha-kit/issues"
   },
-  "homepage": "https://github.com/edward124689/ngx-captcha-kit#readme"
+  "homepage": "https://github.com/edward124689/ngx-captcha-kit#readme",
+  "keywords": [
+    "angular",
+    "captcha",
+    "recaptcha",
+    "turnstile",
+    "alibaba-captcha",
+    "bot-protection",
+    "angular-seo",
+    "invisible-captcha",
+    "multi-captcha"
+  ]
 }
