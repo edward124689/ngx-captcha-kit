@@ -11,7 +11,7 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/edward124689/ngx-captcha-kit"
+    "url": "git+https://github.com/edward124689/ngx-captcha-kit.git"
   },
   "bugs": {
     "url": "https://github.com/edward124689/ngx-captcha-kit/issues"
