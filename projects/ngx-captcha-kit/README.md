@@ -1,12 +1,13 @@
 # ngx-captcha-kit
 [![npm version](https://badge.fury.io/js/ngx-captcha-kit.svg)](https://www.npmjs.com/package/ngx-captcha-kit) [![npm downloads](https://img.shields.io/npm/dm/ngx-captcha-kit.svg)](https://www.npmjs.com/package/ngx-captcha-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An Angular library that provides a unified integration for multiple CAPTCHA services in Angular applications. Supports Google reCAPTCHA v2 (Checkbox and Invisible) and v3, Cloudflare Turnstile, and Alibaba Cloud Captcha 2.0, with a modular architecture for easy expansion. This kit simplifies CAPTCHA implementation with a single component and service, ensuring compatibility with Angular 20+ features like Signals and zoneless change detection.
+An Angular library that provides a unified integration for multiple CAPTCHA services in Angular applications. Supports Google reCAPTCHA v2 (Checkbox and Invisible) and v3, Cloudflare Turnstile, and Alibaba Cloud Captcha 2.0, with a modular architecture for easy expansion. This kit simplifies CAPTCHA implementation with a single component and service, ensuring compatibility with modern Angular features like Signals and zoneless change detection.
 
 ## Table of Contents
 
 - [Features](#features)
 - [Installation](#installation)
+- [Version Support](#version-support)
 - [Usage](#usage)
   - [Importing the Module](#importing-the-module)
   - [General CAPTCHA Component](#general-captcha-component)
@@ -31,7 +32,7 @@ An Angular library that provides a unified integration for multiple CAPTCHA serv
 - **Dynamic Script Loading**: Loads provider scripts on-demand with SSR compatibility.
 - **Language Support**: Customizable language via input (e.g., 'en', 'zh-TW', 'auto').
 - **Extensible Design**: Easily add new CAPTCHA providers by extending the service and component.
-- **Angular 20+ Compatibility**: Supports modern Angular APIs, zoneless apps, and avoids unnecessary Zone.js dependencies.
+- **Angular 21 Compatibility**: Supports modern Angular APIs, zoneless apps, and avoids unnecessary Zone.js dependencies.
 - **TypeScript Support**: Full typings for improved developer experience.
 
 ## Installation
@@ -48,7 +49,14 @@ For scoped packages (if published under a namespace):
 npm install @your-username/ngx-captcha-kit
 ```
 
-Ensure your project uses Angular 20 or higher. Peer dependencies: `@angular/core` and `@angular/common` at `^20.0.0`.
+Ensure your project uses Angular 21. Peer dependencies: `@angular/core` and `@angular/common` at `^21.0.0`.
+
+## Version Support
+
+| ngx-captcha-kit version | Supported Angular version |
+| --- | --- |
+| `21.x` | Angular `21.x` |
+| `20.x` | Angular `20.x` |
 
 ## Usage
 
