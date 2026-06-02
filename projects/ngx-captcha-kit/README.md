@@ -90,7 +90,7 @@ Obtain keys/credentials:
 
 ### reCAPTCHA v2
 
-For visible checkbox or invisible modes.
+For visible checkbox or invisible modes. Invisible v2 can be triggered manually with `execute()`.
 
 Template:
 ```html
@@ -248,7 +248,7 @@ All providers support language customization via the `language` input (e.g., 'en
 
 - `loadScript(url: string, onloadCallbackName?: string, language?: string): Promise<void>`: Loads scripts dynamically.
 - `executeRecaptchaV3(siteKey: string, action: string, language?: string): Promise<string>`
-- `executeTurnstile(siteKey: string, action?: string, cData?: string): Promise<string>`
+- `executeTurnstile(siteKey: string, action?: string, cData?: string, element?: string | HTMLElement): Promise<string>`
 - `executeAlibabaCaptcha(sceneId: string, options: {...})`
 
 ### CaptchaComponent
@@ -267,7 +267,7 @@ All providers support language customization via the `language` input (e.g., 'en
   - `resolved: EventEmitter<string | any>`
   - `error: EventEmitter<any>`
 - **Methods**:
-  - `execute(): Promise<string>` (for v3 manual execution)
+  - `execute(): Promise<string>` (for reCAPTCHA v2 invisible and v3 manual execution)
 
 ## Configuration Options
 

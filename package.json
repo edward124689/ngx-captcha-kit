@@ -1,6 +1,6 @@
 {
   "name": "ngx-captcha-kit-workspace",
-  "version": "21.0.0",
+  "version": "21.0.1",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",

@@ -8,39 +8,55 @@ import { DOCUMENT } from '@angular/common';
 export class CaptchaService {
   private scriptLoaded = new Map<string, boolean>();
   private readyPromises = new Map<string, Promise<void>>();
+  private nextContainerId = 0;
 
   constructor(
     @Inject(DOCUMENT) private doc: any,
     @Inject(PLATFORM_ID) private platformId: Object
   ) {}
 
-  loadScript(url: string, onloadCallbackName?: string, language?: string, asyncLoad: boolean = true): Promise<void> | undefined {
+  loadScript(url: string, onloadCallbackName?: string, language?: string, asyncLoad: boolean = true): Promise<void> {
     let modifiedUrl = url;
     if (language && url.includes('google.com/recaptcha')) {
       modifiedUrl += (url.includes('?') ? '&' : '?') + `hl=${language}`;
     }
-    if (this.scriptLoaded.get(modifiedUrl)) return this.readyPromises.get(modifiedUrl);
+    const existingPromise = this.readyPromises.get(modifiedUrl);
+    if (existingPromise) return existingPromise;
     if (!isPlatformBrowser(this.platformId)) return Promise.resolve();
 
-    const promise = new Promise<void>((resolve) => {
-      if (onloadCallbackName) {
-        (window as any)[onloadCallbackName] = () => resolve();
-      } else {
+    const promise = new Promise<void>((resolve, reject) => {
+      const resolveOnce = () => {
+        this.scriptLoaded.set(modifiedUrl, true);
         resolve();
-      }
-    });
-    this.readyPromises.set(modifiedUrl, promise);
+      };
 
-    const script = this.doc.createElement('script');
-    script.src = modifiedUrl;
-    script.async = asyncLoad;
-    script.defer = asyncLoad;
-    script.onload = () => {
-      this.scriptLoaded.set(modifiedUrl, true);
-      if (!onloadCallbackName) promise.then(() => {});
-    };
-    this.doc.body.appendChild(script);
+      if (onloadCallbackName) {
+        (window as any)[onloadCallbackName] = resolveOnce;
+      }
+
+      const script = this.doc.createElement('script');
+      script.src = modifiedUrl;
+      script.async = asyncLoad;
+      script.defer = asyncLoad;
+      script.onload = () => {
+        if (!onloadCallbackName) {
+          resolveOnce();
+        }
+      };
+      script.onerror = (err: unknown) => {
+        this.readyPromises.delete(modifiedUrl);
+        this.scriptLoaded.delete(modifiedUrl);
+        reject(err);
+      };
+      this.doc.body.appendChild(script);
+    });
+
+    this.readyPromises.set(modifiedUrl, promise);
     return promise;
+  }
+
+  createContainerId(): string {
+    return `captcha-container-${this.nextContainerId++}`;
   }
 
   async executeRecaptchaV3(siteKey: string, action: string, language?: string): Promise<string> {
@@ -49,11 +65,17 @@ export class CaptchaService {
     return (window as any).grecaptcha.execute(siteKey, { action });
   }
 
-  async executeTurnstile(siteKey: string, action?: string, cData?: string): Promise<string> {
+  async executeTurnstile(siteKey: string, action?: string, cData?: string, element: string | HTMLElement = '#turnstile-container'): Promise<string> {
     await this.loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
-    await (window as any).turnstile.ready();
+    const turnstile = (window as any).turnstile;
+    if (!turnstile) {
+      throw new Error('Turnstile script loaded but turnstile is not available');
+    }
+    if (typeof turnstile.ready === 'function') {
+      await new Promise<void>(resolve => turnstile.ready(resolve));
+    }
     return new Promise((resolve, reject) => {
-      (window as any).turnstile.render('#turnstile-container', {
+      turnstile.render(element, {
         sitekey: siteKey,
         action: action,
         cData: cData,
