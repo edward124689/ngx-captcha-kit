@@ -1,12 +1,43 @@
+import { DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { Injectable, Inject, PLATFORM_ID } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { DOCUMENT } from '@angular/common';
+
+export type AlibabaCaptchaMode = 'embed' | 'popup';
+
+export interface AlibabaCaptchaVerifyResult {
+  captchaResult: boolean;
+  bizResult?: boolean;
+}
+
+export type AlibabaCaptchaVerifyCallback = (captchaVerifyParam: string) => AlibabaCaptchaVerifyResult | Promise<AlibabaCaptchaVerifyResult>;
+
+export interface AlibabaCaptchaSlideStyle {
+  width?: number;
+  height?: number;
+}
+
+export interface AlibabaCaptchaOptions {
+  mode?: AlibabaCaptchaMode;
+  element: string;
+  button: string;
+  captchaVerifyCallback: AlibabaCaptchaVerifyCallback;
+  onBizResultCallback?: (bizResult: boolean | undefined) => void;
+  getInstance?: (instance: any) => void;
+  language?: string;
+  region?: string;
+  prefix: string;
+  slideStyle?: AlibabaCaptchaSlideStyle;
+  immediate?: boolean;
+  timeout?: number;
+  rem?: number;
+  autoRefresh?: boolean;
+  captchaLogoImg?: string;
+  onError?: (error: any) => void;
+}
 
 @Injectable({
   providedIn: 'root'
 })
 export class CaptchaService {
-  private scriptLoaded = new Map<string, boolean>();
   private readyPromises = new Map<string, Promise<void>>();
   private nextContainerId = 0;
 
@@ -20,15 +51,13 @@ export class CaptchaService {
     if (language && url.includes('google.com/recaptcha')) {
       modifiedUrl += (url.includes('?') ? '&' : '?') + `hl=${language}`;
     }
+
     const existingPromise = this.readyPromises.get(modifiedUrl);
     if (existingPromise) return existingPromise;
     if (!isPlatformBrowser(this.platformId)) return Promise.resolve();
 
     const promise = new Promise<void>((resolve, reject) => {
-      const resolveOnce = () => {
-        this.scriptLoaded.set(modifiedUrl, true);
-        resolve();
-      };
+      const resolveOnce = () => resolve();
 
       if (onloadCallbackName) {
         (window as any)[onloadCallbackName] = resolveOnce;
@@ -45,7 +74,6 @@ export class CaptchaService {
       };
       script.onerror = (err: unknown) => {
         this.readyPromises.delete(modifiedUrl);
-        this.scriptLoaded.delete(modifiedUrl);
         reject(err);
       };
       this.doc.body.appendChild(script);
@@ -85,15 +113,53 @@ export class CaptchaService {
     });
   }
 
-  async executeAlibabaCaptcha(sceneId: string | undefined, options: { mode: 'embed' | 'popup' | 'float' | undefined, element: string, captchaVerifyCallback: (param: any) => void, language?: string }) {
+  async executeAlibabaCaptcha(sceneId: string, options: AlibabaCaptchaOptions): Promise<void> {
+    const mode = options.mode || 'embed';
+    if (mode !== 'embed' && mode !== 'popup') {
+      throw new Error('Alibaba Captcha 2.0 supports only "embed" or "popup" mode');
+    }
+
+    (window as any).AliyunCaptchaConfig = {
+      region: options.region || 'cn',
+      prefix: options.prefix,
+    };
+
     await this.loadScript('https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js');
-    (window as any).initAliyunCaptcha({
+    const initAliyunCaptcha = (window as any).initAliyunCaptcha;
+    if (typeof initAliyunCaptcha !== 'function') {
+      throw new Error('AliyunCaptcha script loaded but initAliyunCaptcha is not available');
+    }
+
+    initAliyunCaptcha({
       SceneId: sceneId,
-      mode: options.mode,
+      mode,
       element: options.element,
+      button: options.button,
       captchaVerifyCallback: options.captchaVerifyCallback,
-      language: options.language || 'zh',
-      // 其他選項
+      onBizResultCallback: options.onBizResultCallback || (() => undefined),
+      getInstance: options.getInstance || (() => undefined),
+      language: this.normalizeAlibabaLanguage(options.language),
+      slideStyle: options.slideStyle,
+      immediate: options.immediate,
+      timeout: options.timeout,
+      rem: options.rem,
+      autoRefresh: options.autoRefresh,
+      onError: options.onError,
+      captchaLogoImg: options.captchaLogoImg,
     });
+  }
+
+  private normalizeAlibabaLanguage(language: string | undefined): string {
+    const normalized = (language || 'cn').toLowerCase();
+    if (normalized === 'auto' || normalized === 'zh' || normalized === 'zh-cn' || normalized === 'cn') {
+      return 'cn';
+    }
+    if (normalized === 'zh-tw' || normalized === 'zh-hk' || normalized === 'tw') {
+      return 'tw';
+    }
+    if (normalized === 'en' || normalized.startsWith('en-')) {
+      return 'en';
+    }
+    return language || 'cn';
   }
 }

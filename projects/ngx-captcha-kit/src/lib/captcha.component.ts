@@ -1,6 +1,6 @@
 import { isPlatformBrowser } from '@angular/common';
 import { Component, Input, Output, EventEmitter, AfterViewInit, ElementRef, OnDestroy, ViewChild, Inject, PLATFORM_ID } from '@angular/core';
-import { CaptchaService } from './captcha.service';
+import { AlibabaCaptchaMode, AlibabaCaptchaSlideStyle, AlibabaCaptchaVerifyCallback, AlibabaCaptchaVerifyResult, CaptchaService } from './captcha.service';
 
 type CaptchaType = 'recaptcha-v2' | 'recaptcha-v3' | 'turnstile' | 'alibaba';
 
@@ -23,11 +23,23 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
   @Input() action?: string;
   @Input() theme?: 'light' | 'dark' | 'auto' = 'light';
   @Input() size?: 'normal' | 'compact' | 'invisible' = 'normal';
-  @Input() mode?: 'embed' | 'popup' | 'float' = 'embed';
+  @Input() mode?: AlibabaCaptchaMode | 'float' = 'embed';
   @Input() cData?: string;
   @Input() language?: string = 'auto';
+  @Input() button?: string;
+  @Input() captchaVerifyCallback?: AlibabaCaptchaVerifyCallback;
+  @Input() onBizResultCallback?: (bizResult: boolean | undefined) => void;
+  @Input() getInstance?: (instance: any) => void;
+  @Input() slideStyle?: AlibabaCaptchaSlideStyle;
+  @Input() immediate?: boolean;
+  @Input() timeout?: number;
+  @Input() rem?: number;
+  @Input() autoRefresh?: boolean;
+  @Input() captchaLogoImg?: string;
+  @Input() alibabaOnError?: (error: any) => void;
   @Output() resolved = new EventEmitter<string | any>();
   @Output() error = new EventEmitter<any>();
+  @Output() bizResult = new EventEmitter<boolean | undefined>();
 
   @ViewChild('container', { static: true }) private containerRef?: ElementRef<HTMLElement>;
 
@@ -100,33 +112,7 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
           break;
 
         case 'alibaba':
-          if (!this.sceneId || !this.prefix) {
-            this.emitError('SceneId and Prefix are required for Alibaba Captcha');
-            return;
-          }
-
-          (window as any).AliyunCaptchaConfig = {
-            region: this.region || 'cn',
-            prefix: this.prefix,
-          };
-
-          await this.captchaService.loadScript('https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js');
-          if (this.destroyed) return;
-
-          if (typeof (window as any).initAliyunCaptcha !== 'function') {
-            this.emitError('AliyunCaptcha script loaded but initAliyunCaptcha not defined. Check console for errors.');
-            return;
-          }
-
-          (window as any).initAliyunCaptcha({
-            SceneId: this.sceneId,
-            prefix: this.prefix,
-            region: this.region,
-            mode: this.mode,
-            element: `#${this.containerId}`,
-            captchaVerifyCallback: (param: any) => this.emitResolved(param),
-            language: this.language,
-          });
+          await this.initAlibabaCaptcha();
           break;
 
         default:
@@ -236,6 +222,125 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
         reject(err);
       }
     });
+  }
+
+  private async initAlibabaCaptcha(): Promise<void> {
+    if (!this.validateAlibabaInputs()) {
+      return;
+    }
+
+    const alibabaMode = this.getAlibabaMode();
+    if (!alibabaMode) return;
+
+    (window as any).AliyunCaptchaConfig = {
+      region: this.region || 'cn',
+      prefix: this.prefix,
+    };
+
+    await this.captchaService.loadScript('https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js');
+    if (this.destroyed) return;
+
+    const initAliyunCaptcha = (window as any).initAliyunCaptcha;
+    if (typeof initAliyunCaptcha !== 'function') {
+      this.emitError('AliyunCaptcha script loaded but initAliyunCaptcha not defined. Check console for errors.');
+      return;
+    }
+
+    initAliyunCaptcha({
+      SceneId: this.sceneId,
+      mode: alibabaMode,
+      element: `#${this.containerId}`,
+      button: this.button,
+      captchaVerifyCallback: (param: string) => this.handleAlibabaVerify(param),
+      onBizResultCallback: (result: boolean | undefined) => this.handleAlibabaBizResult(result),
+      getInstance: (instance: any) => this.handleAlibabaInstance(instance),
+      slideStyle: this.slideStyle,
+      language: this.normalizeAlibabaLanguage(this.language),
+      immediate: this.immediate,
+      timeout: this.timeout,
+      rem: this.rem,
+      autoRefresh: this.autoRefresh,
+      onError: (err: any) => this.handleAlibabaError(err),
+      captchaLogoImg: this.captchaLogoImg,
+    });
+  }
+
+  private validateAlibabaInputs(): boolean {
+    if (!this.sceneId || !this.prefix) {
+      this.emitError('SceneId and Prefix are required for Alibaba Captcha');
+      return false;
+    }
+    if (!this.button) {
+      this.emitError('button is required for Alibaba Captcha 2.0');
+      return false;
+    }
+    if (!this.captchaVerifyCallback) {
+      this.emitError('captchaVerifyCallback is required for Alibaba Captcha 2.0');
+      return false;
+    }
+    return true;
+  }
+
+  private getAlibabaMode(): AlibabaCaptchaMode | undefined {
+    const mode = this.mode || 'embed';
+    if (mode !== 'embed' && mode !== 'popup') {
+      this.emitError('Alibaba Captcha 2.0 supports only "embed" or "popup" mode');
+      return undefined;
+    }
+    return mode;
+  }
+
+  private async handleAlibabaVerify(captchaVerifyParam: string): Promise<AlibabaCaptchaVerifyResult> {
+    if (this.destroyed) {
+      return { captchaResult: false, bizResult: false };
+    }
+
+    this.emitResolved(captchaVerifyParam);
+
+    try {
+      const result = await this.captchaVerifyCallback?.(captchaVerifyParam);
+      if (!result || typeof result.captchaResult !== 'boolean') {
+        throw new Error('Alibaba captchaVerifyCallback must return { captchaResult: boolean, bizResult?: boolean }');
+      }
+      return result;
+    } catch (err) {
+      this.emitError(err);
+      return { captchaResult: false, bizResult: false };
+    }
+  }
+
+  private handleAlibabaBizResult(result: boolean | undefined): void {
+    if (this.destroyed) return;
+
+    this.bizResult.emit(result);
+    this.onBizResultCallback?.(result);
+  }
+
+  private handleAlibabaInstance(instance: any): void {
+    if (this.destroyed) return;
+
+    this.getInstance?.(instance);
+  }
+
+  private handleAlibabaError(err: any): void {
+    if (this.destroyed) return;
+
+    this.emitError(err);
+    this.alibabaOnError?.(err);
+  }
+
+  private normalizeAlibabaLanguage(language: string | undefined): string {
+    const normalized = (language || 'cn').toLowerCase();
+    if (normalized === 'auto' || normalized === 'zh' || normalized === 'zh-cn' || normalized === 'cn') {
+      return 'cn';
+    }
+    if (normalized === 'zh-tw' || normalized === 'zh-hk' || normalized === 'tw') {
+      return 'tw';
+    }
+    if (normalized === 'en' || normalized.startsWith('en-')) {
+      return 'en';
+    }
+    return language || 'cn';
   }
 
   private emitResolved(value: any): void {

@@ -168,6 +168,103 @@ describe('CaptchaComponent', () => {
     expect((window as any).turnstileOnload).toBeUndefined();
   });
 
+  it('requires Alibaba Captcha 2.0 button and captchaVerifyCallback', async () => {
+    createComponent();
+    spyOn(component.error, 'emit');
+
+    component.type = 'alibaba';
+    component.sceneId = 'scene-id';
+    component.prefix = 'prefix';
+
+    await initializeComponent();
+
+    expect(component.error.emit).toHaveBeenCalledOnceWith('button is required for Alibaba Captcha 2.0');
+    expect(captchaService.loadScript).not.toHaveBeenCalled();
+  });
+
+  it('initializes Alibaba Captcha 2.0 with V2 callbacks and options', async () => {
+    createComponent();
+    spyOn(component.resolved, 'emit');
+    spyOn(component.bizResult, 'emit');
+    spyOn(component.error, 'emit');
+    const verifyCallback = jasmine.createSpy('verifyCallback').and.resolveTo({ captchaResult: true, bizResult: true });
+    const bizResultCallback = jasmine.createSpy('bizResultCallback');
+    const getInstance = jasmine.createSpy('getInstance');
+    const alibabaOnError = jasmine.createSpy('alibabaOnError');
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+
+    component.type = 'alibaba';
+    component.sceneId = 'scene-id';
+    component.prefix = 'prefix';
+    component.region = 'sgp';
+    component.mode = 'popup';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = verifyCallback;
+    component.onBizResultCallback = bizResultCallback;
+    component.getInstance = getInstance;
+    component.slideStyle = { width: 360, height: 40 };
+    component.language = 'en';
+    component.immediate = true;
+    component.timeout = 6000;
+    component.rem = 1.2;
+    component.autoRefresh = false;
+    component.captchaLogoImg = 'data:image/png;base64,logo';
+    component.alibabaOnError = alibabaOnError;
+
+    await initializeComponent();
+
+    expect((window as any).AliyunCaptchaConfig).toEqual({ region: 'sgp', prefix: 'prefix' });
+    expect((window as any).initAliyunCaptcha).toHaveBeenCalled();
+    expect(initOptions).toEqual(jasmine.objectContaining({
+      SceneId: 'scene-id',
+      mode: 'popup',
+      element: `#${component.containerId}`,
+      button: '#login-button',
+      slideStyle: { width: 360, height: 40 },
+      language: 'en',
+      immediate: true,
+      timeout: 6000,
+      rem: 1.2,
+      autoRefresh: false,
+      captchaLogoImg: 'data:image/png;base64,logo',
+    }));
+
+    await expectAsync(initOptions.captchaVerifyCallback('captcha-param')).toBeResolvedTo({ captchaResult: true, bizResult: true });
+    expect(verifyCallback).toHaveBeenCalledOnceWith('captcha-param');
+    expect(component.resolved.emit).toHaveBeenCalledOnceWith('captcha-param');
+
+    initOptions.onBizResultCallback(false);
+    expect(component.bizResult.emit).toHaveBeenCalledOnceWith(false);
+    expect(bizResultCallback).toHaveBeenCalledOnceWith(false);
+
+    initOptions.getInstance({ reload: true });
+    expect(getInstance).toHaveBeenCalledOnceWith({ reload: true });
+
+    initOptions.onError('aliyun-error');
+    expect(component.error.emit).toHaveBeenCalledOnceWith('aliyun-error');
+    expect(alibabaOnError).toHaveBeenCalledOnceWith('aliyun-error');
+  });
+
+  it('rejects unsupported Alibaba float mode', async () => {
+    createComponent();
+    spyOn(component.error, 'emit');
+
+    component.type = 'alibaba';
+    component.sceneId = 'scene-id';
+    component.prefix = 'prefix';
+    component.mode = 'float';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => ({ captchaResult: true });
+
+    await initializeComponent();
+
+    expect(component.error.emit).toHaveBeenCalledOnceWith('Alibaba Captcha 2.0 supports only "embed" or "popup" mode');
+    expect(captchaService.loadScript).not.toHaveBeenCalled();
+  });
+
   it('does not render after being destroyed while a provider script is loading', async () => {
     createComponent();
     let resolveScript!: () => void;
@@ -194,6 +291,8 @@ describe('CaptchaComponent', () => {
 describe('CaptchaService', () => {
   afterEach(() => {
     delete (window as any).turnstile;
+    delete (window as any).initAliyunCaptcha;
+    delete (window as any).AliyunCaptchaConfig;
   });
 
   it('waits for script.onload before resolving scripts without provider callbacks', async () => {
@@ -274,5 +373,74 @@ describe('CaptchaService', () => {
       action: 'submit',
       cData: 'payload',
     }));
+  });
+
+  it('initializes Alibaba Captcha 2.0 through the service', async () => {
+    const service = new CaptchaService({} as any, 'browser');
+    spyOn(service, 'loadScript').and.resolveTo();
+    const verifyCallback = jasmine.createSpy('verifyCallback').and.returnValue({ captchaResult: true });
+    const onBizResultCallback = jasmine.createSpy('onBizResultCallback');
+    const getInstance = jasmine.createSpy('getInstance');
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+
+    await service.executeAlibabaCaptcha('scene-id', {
+      mode: 'embed',
+      element: '#captcha-element',
+      button: '#submit-button',
+      captchaVerifyCallback: verifyCallback,
+      onBizResultCallback,
+      getInstance,
+      language: 'tw',
+      region: 'cn',
+      prefix: 'prefix',
+      slideStyle: { width: 360, height: 40 },
+      immediate: false,
+      timeout: 5000,
+      rem: 1,
+      autoRefresh: true,
+      captchaLogoImg: 'logo-url',
+    });
+
+    expect((window as any).AliyunCaptchaConfig).toEqual({ region: 'cn', prefix: 'prefix' });
+    expect(initOptions).toEqual(jasmine.objectContaining({
+      SceneId: 'scene-id',
+      mode: 'embed',
+      element: '#captcha-element',
+      button: '#submit-button',
+      captchaVerifyCallback: verifyCallback,
+      onBizResultCallback,
+      getInstance,
+      language: 'tw',
+      slideStyle: { width: 360, height: 40 },
+      immediate: false,
+      timeout: 5000,
+      rem: 1,
+      autoRefresh: true,
+      captchaLogoImg: 'logo-url',
+    }));
+  });
+
+  it('uses default Alibaba service callbacks and normalizes language aliases', async () => {
+    const service = new CaptchaService({} as any, 'browser');
+    spyOn(service, 'loadScript').and.resolveTo();
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+
+    await service.executeAlibabaCaptcha('scene-id', {
+      element: '#captcha-element',
+      button: '#submit-button',
+      captchaVerifyCallback: () => ({ captchaResult: true }),
+      language: 'zh-TW',
+      prefix: 'prefix',
+    });
+
+    expect(initOptions.language).toBe('tw');
+    expect(typeof initOptions.onBizResultCallback).toBe('function');
+    expect(typeof initOptions.getInstance).toBe('function');
   });
 });

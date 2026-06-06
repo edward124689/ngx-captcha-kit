@@ -28,7 +28,7 @@ An Angular library that provides a unified integration for multiple CAPTCHA serv
 - **Multi-Provider Support**:
   - Google reCAPTCHA v2 (visible checkbox/invisible) and v3 (score-based invisible).
   - Cloudflare Turnstile (invisible or interactive widget with score-based verification).
-  - Alibaba Cloud Captcha 2.0 (sliding puzzle, intelligent validation, embed/popup/float modes).
+  - Alibaba Cloud Captcha 2.0 (no-trace validation, one-click pass, slider validation, jigsaw validation, and image restoration via embed/popup modes).
 - **Dynamic Script Loading**: Loads provider scripts on-demand with SSR compatibility.
 - **Language Support**: Customizable language via input (e.g., 'en', 'zh-TW', 'auto').
 - **Extensible Design**: Easily add new CAPTCHA providers by extending the service and component.
@@ -87,7 +87,7 @@ Use the `<captcha-kit>` component and specify the `type` input to select the pro
 Obtain keys/credentials:
 - Google reCAPTCHA: From [Google reCAPTCHA Admin](https://www.google.com/recaptcha/admin).
 - Cloudflare Turnstile: From Cloudflare Dashboard.
-- Alibaba Cloud Captcha: From Alibaba Cloud Console (SceneId, etc.).
+- Alibaba Cloud Captcha: From Alibaba Cloud Console (SceneId, prefix, and region).
 
 ### reCAPTCHA v2
 
@@ -115,9 +115,7 @@ onResolved(token: string) {
 
 ### reCAPTCHA v3
 
-Invisible, score-based verification. For v3, use the service directly or the component for pre-loading the script, but execute manually (e.g., in form submit) to generate fresh tokens.<grok:render card_id="f7e076" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">1</argument>
-</grok:render>
+Invisible, score-based verification. For v3, use the service directly or the component for pre-loading the script, but execute manually (e.g., in form submit) to generate fresh tokens.
 
 **Using Service (Recommended for v3):**
 No template needed.
@@ -179,15 +177,11 @@ async onSubmit() {
 }
 ```
 
-Best practices: Execute on sensitive actions (e.g., login, submit); tokens expire after about 2 minutes; analyze scores in admin console (threshold e.g., 0.5).<grok:render card_id="d368c6" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">1</argument>
-</grok:render>
+Best practices: Execute on sensitive actions (e.g., login, submit); tokens expire after about 2 minutes; analyze scores in admin console (threshold e.g., 0.5).
 
 ### Cloudflare Turnstile
 
-Invisible or interactive. Use explicit rendering for control.<grok:render card_id="0bdf3b" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">3</argument>
-</grok:render>
+Invisible or interactive. Use explicit rendering for control.
 
 Template:
 ```html
@@ -202,38 +196,78 @@ Template:
 </captcha-kit>
 ```
 
-Backend verifies via Cloudflare's siteverify API.<grok:render card_id="dd6308" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">3</argument>
-</grok:render>
+Backend verifies via Cloudflare's siteverify API.
 
 ### Alibaba Cloud Captcha 2.0
 
-Supports sliding validation or intelligent modes. Integrate initialization code into client.<grok:render card_id="12fd6c" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">8</argument>
-</grok:render><grok:render card_id="7e17ca" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">9</argument>
-</grok:render>
+Alibaba Cloud Captcha 2.0 supports no-trace validation, one-click pass, slider validation, jigsaw validation, and image restoration. The exact verification shape is configured in the Alibaba Cloud scene/risk policy, so the Angular integration uses the same V2 initialization path for all shapes.
+
+For no-trace validation, use `mode="popup"` because Alibaba Cloud Captcha 2.0 does not support no-trace validation in embedded mode.
 
 Template:
 ```html
+<button id="login-button" type="button">Login</button>
+
 <captcha-kit
   type="alibaba"
   [sceneId]="'YOUR_SCENE_ID'"
-  [mode]="'embed'"
+  [prefix]="'YOUR_PREFIX'"
+  [region]="'cn'"
+  [mode]="'popup'"
+  [button]="'#login-button'"
+  [captchaVerifyCallback]="verifyAlibabaCaptcha"
+  [slideStyle]="{ width: 360, height: 40 }"
   [language]="'en'"
-  (resolved)="onResolved($event)">
+  (resolved)="onAlibabaParam($event)"
+  (bizResult)="onAlibabaBizResult($event)"
+  (error)="onError($event)">
 </captcha-kit>
 ```
 
-The `resolved` emits a param object; send to backend for verification using Alibaba's SDK.<grok:render card_id="3fdb99" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">8</argument>
-</grok:render>
+Component:
+```typescript
+import { HttpClient } from '@angular/common/http';
+import { Component } from '@angular/core';
+import { AlibabaCaptchaVerifyResult } from 'ngx-captcha-kit';
+import { firstValueFrom } from 'rxjs';
+
+@Component({
+  selector: 'app-login',
+  templateUrl: './login.component.html',
+})
+export class LoginComponent {
+  constructor(private http: HttpClient) {}
+
+  verifyAlibabaCaptcha = async (captchaVerifyParam: string): Promise<AlibabaCaptchaVerifyResult> => {
+    const result = await firstValueFrom(this.http.post<{
+      captchaVerifyResult: boolean;
+      bizResult?: boolean;
+    }>('/api/verify-alibaba-captcha', {
+      captchaVerifyParam,
+      // Include your business params here, for example username/password or form id.
+    }));
+
+    return {
+      captchaResult: result.captchaVerifyResult,
+      bizResult: result.bizResult,
+    };
+  };
+
+  onAlibabaParam(captchaVerifyParam: string) {
+    // Optional: the same param is passed to verifyAlibabaCaptcha.
+  }
+
+  onAlibabaBizResult(bizResult: boolean | undefined) {
+    // Continue or reject the business flow based on your backend response.
+  }
+}
+```
+
+`captchaVerifyCallback` must call your backend and return `{ captchaResult: boolean, bizResult?: boolean }`. The backend should call Alibaba Cloud `VerifyIntelligentCaptcha`; do not trust browser-only verification.
 
 ### Language Customization
 
-All providers support language customization via the `language` input (e.g., 'en', 'zh', 'auto'). For reCAPTCHA, use `hl` parameter in script.<grok:render card_id="6b9330" card_type="citation_card" type="render_inline_citation">
-<argument name="citation_id">2</argument>
-</grok:render> Defaults to 'auto' (browser detection).
+All providers support language customization via the `language` input (e.g., 'en', 'zh', 'zh-TW', 'auto'). For Alibaba Cloud Captcha 2.0, language aliases are normalized to `cn`, `tw`, or `en`. Defaults to 'auto' (browser detection where supported).
 
 ### Error Handling and Best Practices
 
@@ -250,7 +284,7 @@ All providers support language customization via the `language` input (e.g., 'en
 - `loadScript(url: string, onloadCallbackName?: string, language?: string): Promise<void>`: Loads scripts dynamically.
 - `executeRecaptchaV3(siteKey: string, action: string, language?: string): Promise<string>`
 - `executeTurnstile(siteKey: string, action?: string, cData?: string, element?: string | HTMLElement): Promise<string>`
-- `executeAlibabaCaptcha(sceneId: string, options: {...})`
+- `executeAlibabaCaptcha(sceneId: string, options: AlibabaCaptchaOptions): Promise<void>`
 
 ### CaptchaComponent
 
@@ -258,15 +292,29 @@ All providers support language customization via the `language` input (e.g., 'en
   - `type: 'recaptcha-v2' | 'recaptcha-v3' | 'turnstile' | 'alibaba'`
   - `siteKey?: string` (for Google/Cloudflare)
   - `sceneId?: string` (for Alibaba)
+  - `prefix?: string` (for Alibaba Captcha 2.0)
+  - `region?: string` (for Alibaba Captcha 2.0, defaults to `cn`)
   - `action?: string`
   - `theme?: 'light' | 'dark' | 'auto'`
   - `size?: 'normal' | 'compact' | 'invisible'`
-  - `mode?: 'embed' | 'popup' | 'float'`
+  - `mode?: 'embed' | 'popup'` (for Alibaba Captcha 2.0)
   - `cData?: string` (Turnstile)
   - `language?: string` (defaults to 'auto')
+  - `button?: string` (Alibaba Captcha 2.0 trigger selector)
+  - `captchaVerifyCallback?: AlibabaCaptchaVerifyCallback`
+  - `onBizResultCallback?: (bizResult: boolean | undefined) => void`
+  - `getInstance?: (instance: any) => void`
+  - `slideStyle?: { width?: number; height?: number }`
+  - `immediate?: boolean`
+  - `timeout?: number`
+  - `rem?: number`
+  - `autoRefresh?: boolean`
+  - `captchaLogoImg?: string`
+  - `alibabaOnError?: (error: any) => void`
 - **Outputs**:
   - `resolved: EventEmitter<string | any>`
   - `error: EventEmitter<any>`
+  - `bizResult: EventEmitter<boolean | undefined>`
 - **Methods**:
   - `execute(): Promise<string>` (for reCAPTCHA v2 invisible and v3 manual execution)
 
