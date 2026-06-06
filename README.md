@@ -32,7 +32,7 @@ An Angular library that provides a unified integration for multiple CAPTCHA serv
 - **Dynamic Script Loading**: Loads provider scripts on-demand with SSR compatibility.
 - **Language Support**: Customizable language via input (e.g., 'en', 'zh-TW', 'auto').
 - **Extensible Design**: Easily add new CAPTCHA providers by extending the service and component.
-- **Angular 21 Compatibility**: Supports modern Angular APIs, zoneless apps, and avoids unnecessary Zone.js dependencies.
+- **Angular 22 Compatibility**: Supports modern Angular APIs, zoneless apps, and avoids unnecessary Zone.js dependencies.
 - **TypeScript Support**: Full typings for improved developer experience.
 
 ## Installation
@@ -49,12 +49,13 @@ For scoped packages (if published under a namespace):
 npm install @your-username/ngx-captcha-kit
 ```
 
-Ensure your project uses Angular 21. Peer dependencies: `@angular/core` and `@angular/common` at `^21.0.0`.
+Ensure your project uses Angular 22. Peer dependencies: `@angular/core` and `@angular/common` at `^22.0.0`.
 
 ## Version Support
 
 | ngx-captcha-kit version | Supported Angular version |
 | --- | --- |
+| `22.x` | Angular `22.x` |
 | `21.x` | Angular `21.x` |
 | `20.x` | Angular `20.x` |
 
