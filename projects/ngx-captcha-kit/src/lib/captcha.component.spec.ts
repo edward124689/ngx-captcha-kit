@@ -31,6 +31,11 @@ describe('CaptchaComponent', () => {
     delete (window as any).turnstile;
     delete (window as any).initAliyunCaptcha;
     delete (window as any).AliyunCaptchaConfig;
+    delete (window as any).existingCallback;
+    delete (window as any).sharedCallback;
+    delete (window as any).neverCalled;
+    delete (window as any).lateCallback;
+    delete (window as any).timedOutCallback;
   });
 
   function createComponent(): CaptchaComponent {
@@ -62,12 +67,21 @@ describe('CaptchaComponent', () => {
     expect(first.containerId).not.toEqual(second.containerId);
   });
 
+  it('does not mark explicitly rendered Turnstile containers for implicit rendering', () => {
+    createComponent();
+    component.type = 'turnstile';
+
+    expect(component.getClass()).toBe('');
+  });
+
   it('executes reCAPTCHA v3 after the script is ready', async () => {
     createComponent();
     spyOn(component.resolved, 'emit');
     (window as any).grecaptcha = {
       ready: (callback: () => void) => callback(),
+      render: jasmine.createSpy('render').and.returnValue(11),
       execute: jasmine.createSpy('execute').and.resolveTo('v3-token'),
+      reset: jasmine.createSpy('reset'),
     };
 
     component.type = 'recaptcha-v3';
@@ -79,7 +93,16 @@ describe('CaptchaComponent', () => {
     const token = await component.execute();
 
     expect(token).toBe('v3-token');
-    expect((window as any).grecaptcha.execute).toHaveBeenCalledOnceWith('site-key', { action: 'submit' });
+    expect(captchaService.loadScript).toHaveBeenCalledOnceWith(
+      'https://www.google.com/recaptcha/api.js?render=explicit',
+      undefined,
+      'auto',
+    );
+    expect((window as any).grecaptcha.render).toHaveBeenCalledWith(
+      jasmine.any(HTMLElement),
+      { sitekey: 'site-key', size: 'invisible', theme: 'light' },
+    );
+    expect((window as any).grecaptcha.execute).toHaveBeenCalledOnceWith(11, { action: 'submit' });
     expect(component.resolved.emit).toHaveBeenCalledOnceWith('v3-token');
   });
 
@@ -108,6 +131,27 @@ describe('CaptchaComponent', () => {
     expect((window as any).grecaptcha.execute).toHaveBeenCalledOnceWith(7);
     expect(component.resolved.emit).toHaveBeenCalledOnceWith('v2-token');
     expect((window as any).ngRecaptchaOnload).toBeUndefined();
+  });
+
+  it('maps the auto theme to a reCAPTCHA-compatible system theme', async () => {
+    createComponent();
+    spyOn(window, 'matchMedia').and.returnValue({ matches: true } as MediaQueryList);
+    (window as any).grecaptcha = {
+      render: jasmine.createSpy('render').and.returnValue(7),
+      reset: jasmine.createSpy('reset'),
+    };
+
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'site-key';
+    component.theme = 'auto';
+
+    await initializeComponent();
+
+    expect(window.matchMedia).toHaveBeenCalledOnceWith('(prefers-color-scheme: dark)');
+    expect((window as any).grecaptcha.render).toHaveBeenCalledWith(
+      jasmine.any(HTMLElement),
+      jasmine.objectContaining({ theme: 'dark' }),
+    );
   });
 
   it('rejects invisible reCAPTCHA v2 execution when the challenge expires', async () => {
@@ -150,21 +194,52 @@ describe('CaptchaComponent', () => {
     await expectAsync(component.execute()).toBeRejectedWithError('reCAPTCHA v2 execute() requires size="invisible"');
   });
 
-  it('renders Turnstile without a component-level global callback', async () => {
+  it('renders and manually executes Turnstile with current widget options', async () => {
     createComponent();
+    spyOn(component.resolved, 'emit');
+    spyOn(component.expired, 'emit');
+    spyOn(component.timedOut, 'emit');
+    let renderOptions: any;
     (window as any).turnstile = {
       ready: (callback: () => void) => callback(),
-      render: jasmine.createSpy('render').and.returnValue('widget-id'),
+      render: jasmine.createSpy('render').and.callFake((_element: HTMLElement, options: any) => {
+        renderOptions = options;
+        return 'widget-id';
+      }),
+      execute: jasmine.createSpy('execute'),
       remove: jasmine.createSpy('remove'),
     };
 
     component.type = 'turnstile';
     component.siteKey = 'site-key';
     component.action = 'submit';
+    component.size = 'flexible';
+    component.execution = 'execute';
+    component.appearance = 'interaction-only';
 
     await initializeComponent();
 
-    expect((window as any).turnstile.render).toHaveBeenCalled();
+    expect((window as any).turnstile.render).toHaveBeenCalledWith(
+      jasmine.any(HTMLElement),
+      jasmine.objectContaining({
+        sitekey: 'site-key',
+        size: 'flexible',
+        execution: 'execute',
+        appearance: 'interaction-only',
+      }),
+    );
+
+    const tokenPromise = component.execute();
+    expect((window as any).turnstile.execute).toHaveBeenCalledOnceWith('widget-id');
+    renderOptions.callback('turnstile-token');
+
+    await expectAsync(tokenPromise).toBeResolvedTo('turnstile-token');
+    expect(component.resolved.emit).toHaveBeenCalledOnceWith('turnstile-token');
+
+    renderOptions['expired-callback']();
+    renderOptions['timeout-callback']();
+    expect(component.expired.emit).toHaveBeenCalledTimes(1);
+    expect(component.timedOut.emit).toHaveBeenCalledTimes(1);
     expect((window as any).turnstileOnload).toBeUndefined();
   });
 
@@ -255,7 +330,7 @@ describe('CaptchaComponent', () => {
     component.type = 'alibaba';
     component.sceneId = 'scene-id';
     component.prefix = 'prefix';
-    component.mode = 'float';
+    component.mode = 'float' as any;
     component.button = '#login-button';
     component.captchaVerifyCallback = () => ({ captchaResult: true });
 
@@ -290,9 +365,15 @@ describe('CaptchaComponent', () => {
 
 describe('CaptchaService', () => {
   afterEach(() => {
+    delete (window as any).grecaptcha;
     delete (window as any).turnstile;
     delete (window as any).initAliyunCaptcha;
     delete (window as any).AliyunCaptchaConfig;
+    delete (window as any).existingCallback;
+    delete (window as any).sharedCallback;
+    delete (window as any).neverCalled;
+    delete (window as any).lateCallback;
+    delete (window as any).timedOutCallback;
   });
 
   it('waits for script.onload before resolving scripts without provider callbacks', async () => {
@@ -305,7 +386,7 @@ describe('CaptchaService', () => {
         }),
       },
     };
-    const service = new CaptchaService(fakeDocument, 'browser');
+    const service = new CaptchaService(fakeDocument as any, 'browser');
 
     const promise = service.loadScript('https://example.test/script.js');
     let resolved = false;
@@ -330,13 +411,457 @@ describe('CaptchaService', () => {
         appendChild: jasmine.createSpy('appendChild'),
       },
     };
-    const service = new CaptchaService(fakeDocument, 'browser');
+    const service = new CaptchaService(fakeDocument as any, 'browser');
 
     const first = service.loadScript('https://example.test/script.js');
     const second = service.loadScript('https://example.test/script.js');
 
     expect(second).toBe(first);
     expect(fakeDocument.body.appendChild).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a callback change for the same pending script instead of silently ignoring it', async () => {
+    let appendedScript: any;
+    const fakeDocument = {
+      createElement: () => ({ dataset: {}, remove: jasmine.createSpy('remove') }),
+      body: {
+        appendChild: jasmine.createSpy('appendChild').and.callFake((script: any) => {
+          appendedScript = script;
+        }),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const first = service.loadScript('https://example.test/same-script.js');
+    const second = service.loadScript('https://example.test/same-script.js', 'lateCallback');
+
+    expect(second).not.toBe(first);
+    await expectAsync(second).toBeRejectedWithError(
+      'https://example.test/same-script.js is already loading with callback="none"; cannot request callback="lateCallback"',
+    );
+    expect((window as any).lateCallback).toBeUndefined();
+    expect(fakeDocument.body.appendChild).toHaveBeenCalledTimes(1);
+
+    appendedScript.onload();
+    await expectAsync(first).toBeResolved();
+  });
+
+  it('times out and cleans up a newly appended script that never settles', async () => {
+    const remove = jasmine.createSpy('remove');
+    const appendedScripts: any[] = [];
+    const fakeDocument = {
+      createElement: () => ({ dataset: {}, remove }),
+      body: {
+        appendChild: jasmine.createSpy('appendChild').and.callFake((script: any) => {
+          appendedScripts.push(script);
+        }),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    jasmine.clock().install();
+    try {
+      const promise = service.loadScript('https://example.test/hanging-script.js', 'timedOutCallback');
+      jasmine.clock().tick(15001);
+
+      await expectAsync(promise).toBeRejectedWithError(
+        'Timed out loading CAPTCHA script: https://example.test/hanging-script.js',
+      );
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect((window as any).timedOutCallback).toBeUndefined();
+
+      const retry = service.loadScript('https://example.test/hanging-script.js');
+      expect(appendedScripts.length).toBe(2);
+      appendedScripts[1].onload();
+      await expectAsync(retry).toBeResolved();
+    } finally {
+      jasmine.clock().uninstall();
+    }
+  });
+
+  it('omits the Google hl parameter when language is auto', async () => {
+    let appendedScript: any;
+    const fakeDocument = {
+      createElement: jasmine.createSpy('createElement').and.returnValue({}),
+      body: {
+        appendChild: jasmine.createSpy('appendChild').and.callFake((script: any) => {
+          appendedScript = script;
+        }),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const promise = service.loadScript('https://www.google.com/recaptcha/api.js?render=explicit', undefined, 'auto');
+
+    expect(appendedScript.src).toBe('https://www.google.com/recaptcha/api.js?render=explicit');
+    appendedScript.onload();
+    await promise;
+  });
+
+  it('deduplicates Google scripts across language variants', () => {
+    const fakeDocument = {
+      createElement: jasmine.createSpy('createElement').and.returnValue({}),
+      body: {
+        appendChild: jasmine.createSpy('appendChild'),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const first = service.loadScript('https://www.google.com/recaptcha/api.js?render=explicit', undefined, 'en');
+    const second = service.loadScript('https://www.google.com/recaptcha/api.js?render=explicit', undefined, 'fr');
+
+    expect(second).toBe(first);
+    expect(fakeDocument.body.appendChild).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects incompatible Google render configurations without loading a second SDK', async () => {
+    const fakeDocument = {
+      createElement: jasmine.createSpy('createElement').and.callFake(() => ({ dataset: {} })),
+      body: {
+        appendChild: jasmine.createSpy('appendChild'),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const explicit = service.loadScript('https://www.google.com/recaptcha/api.js?render=explicit');
+    const siteKey = service.loadScript('https://www.google.com/recaptcha/api.js?render=site-key');
+
+    expect(siteKey).not.toBe(explicit);
+    await expectAsync(siteKey).toBeRejectedWithError(
+      'google-recaptcha is already loading or loaded with render="explicit"; cannot request render="site-key"',
+    );
+    expect(fakeDocument.body.appendChild).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects mixing implicit and explicit Turnstile script modes', async () => {
+    let appendedScript: any;
+    const fakeDocument = {
+      createElement: () => ({ dataset: {}, remove: jasmine.createSpy('remove') }),
+      body: {
+        appendChild: jasmine.createSpy('appendChild').and.callFake((script: any) => {
+          appendedScript = script;
+        }),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const implicit = service.loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js');
+    const explicit = service.loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
+
+    await expectAsync(explicit).toBeRejectedWithError(
+      'cloudflare-turnstile is already loading or loaded with render="implicit"; cannot request render="explicit"',
+    );
+    expect(fakeDocument.body.appendChild).toHaveBeenCalledTimes(1);
+
+    appendedScript.onload();
+    await expectAsync(implicit).toBeResolved();
+  });
+
+  it('does not treat the Google ready queue shim as a loaded SDK', async () => {
+    let appendedScript: any;
+    (window as any).grecaptcha = { ready: (_callback: () => void) => undefined };
+    const fakeDocument = {
+      createElement: jasmine.createSpy('createElement').and.returnValue({ dataset: {} }),
+      body: {
+        appendChild: jasmine.createSpy('appendChild').and.callFake((script: any) => {
+          appendedScript = script;
+        }),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const promise = service.loadScript('https://www.google.com/recaptcha/api.js?render=explicit');
+    let resolved = false;
+    promise.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBeFalse();
+    expect(fakeDocument.body.appendChild).toHaveBeenCalledTimes(1);
+
+    (window as any).grecaptcha = {
+      ready: (callback: () => void) => callback(),
+      render: () => 1,
+      execute: () => Promise.resolve('token'),
+    };
+    appendedScript.onload();
+    await promise;
+
+    expect(resolved).toBeTrue();
+  });
+
+  it('resolves when a generic script already exists without a library loading marker', async () => {
+    const existingScript = {
+      src: 'https://example.test/already-loaded.js',
+      dataset: {},
+      readyState: 'complete',
+      getAttribute: (name: string) => name === 'src' ? 'https://example.test/already-loaded.js' : null,
+      addEventListener: jasmine.createSpy('addEventListener'),
+    };
+    const fakeDocument = {
+      querySelectorAll: () => [existingScript],
+      body: {
+        appendChild: jasmine.createSpy('appendChild'),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    await expectAsync(service.loadScript('https://example.test/already-loaded.js')).toBeResolved();
+
+    expect(existingScript.addEventListener).not.toHaveBeenCalled();
+    expect(fakeDocument.body.appendChild).not.toHaveBeenCalled();
+  });
+
+  it('waits for an existing generic script that is still loading', async () => {
+    const listeners = new Map<string, EventListener>();
+    const existingScript = {
+      src: 'https://example.test/still-loading.js',
+      dataset: {},
+      getAttribute: (name: string) => name === 'src' ? 'https://example.test/still-loading.js' : null,
+      addEventListener: jasmine.createSpy('addEventListener').and.callFake(
+        (event: string, callback: EventListener) => listeners.set(event, callback),
+      ),
+    };
+    const fakeDocument = {
+      defaultView: {
+        performance: {
+          getEntriesByName: () => [],
+        },
+      },
+      querySelectorAll: () => [existingScript],
+      body: {
+        appendChild: jasmine.createSpy('appendChild'),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const promise = service.loadScript('https://example.test/still-loading.js');
+    let resolved = false;
+    promise.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBeFalse();
+    expect(listeners.has('load')).toBeTrue();
+
+    listeners.get('load')?.(new Event('load'));
+    await promise;
+
+    expect(resolved).toBeTrue();
+    expect(fakeDocument.body.appendChild).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an unrelated Resource Timing entry as proof that the current script loaded', async () => {
+    const listeners = new Map<string, EventListener>();
+    const existingScript = {
+      src: 'https://example.test/resource-timing.js',
+      dataset: {},
+      getAttribute: (name: string) => name === 'src' ? 'https://example.test/resource-timing.js' : null,
+      addEventListener: (event: string, callback: EventListener) => listeners.set(event, callback),
+      removeEventListener: (event: string) => listeners.delete(event),
+    };
+    const fakeDocument = {
+      defaultView: {
+        performance: {
+          getEntriesByName: () => [{}],
+        },
+      },
+      querySelectorAll: () => [existingScript],
+      body: {
+        appendChild: jasmine.createSpy('appendChild'),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const promise = service.loadScript('https://example.test/resource-timing.js');
+    let resolved = false;
+    promise.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBeFalse();
+    expect(listeners.has('load')).toBeTrue();
+
+    listeners.get('load')?.(new Event('load'));
+    await expectAsync(promise).toBeResolved();
+  });
+
+  it('reserves callback ownership while waiting for an existing script', async () => {
+    const listeners = new Map<string, EventListener>();
+    const existingScript = {
+      src: 'https://example.test/external.js',
+      dataset: {},
+      getAttribute: (name: string) => name === 'src' ? 'https://example.test/external.js' : null,
+      addEventListener: (event: string, callback: EventListener) => listeners.set(event, callback),
+      removeEventListener: (event: string) => listeners.delete(event),
+    };
+    const appendedScripts: any[] = [];
+    const previousCallback = jasmine.createSpy('previousCallback');
+    (window as any).sharedCallback = previousCallback;
+    const fakeDocument = {
+      querySelectorAll: () => [existingScript],
+      createElement: () => ({ dataset: {} }),
+      body: {
+        appendChild: (script: any) => appendedScripts.push(script),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const existing = service.loadScript('https://example.test/external.js', 'sharedCallback');
+    const competing = service.loadScript('https://example.test/competing.js', 'sharedCallback');
+
+    await expectAsync(competing).toBeRejectedWithError(
+      'CAPTCHA script callback "sharedCallback" is already in use',
+    );
+    expect(appendedScripts.length).toBe(0);
+
+    (window as any).sharedCallback('value');
+    await expectAsync(existing).toBeResolved();
+    expect(previousCallback).toHaveBeenCalledOnceWith('value');
+    expect((window as any).sharedCallback).toBe(previousCallback);
+    expect(listeners.has('load')).toBeFalse();
+  });
+
+  it('loads a replacement when a discovered external script has failed', async () => {
+    const listeners = new Map<string, EventListener>();
+    const failedScript = {
+      src: 'https://example.test/retry-external.js',
+      dataset: {},
+      getAttribute: (name: string) => name === 'src' ? 'https://example.test/retry-external.js' : null,
+      addEventListener: (event: string, callback: EventListener) => listeners.set(event, callback),
+      removeEventListener: (event: string) => listeners.delete(event),
+    };
+    let replacementScript: any;
+    const fakeDocument = {
+      querySelectorAll: () => [failedScript],
+      createElement: () => ({ dataset: {} }),
+      body: {
+        appendChild: jasmine.createSpy('appendChild').and.callFake((script: any) => {
+          replacementScript = script;
+        }),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const first = service.loadScript('https://example.test/retry-external.js');
+    listeners.get('error')?.(new Event('error'));
+    await expectAsync(first).toBeRejected();
+
+    const retry = service.loadScript('https://example.test/retry-external.js');
+    expect(fakeDocument.body.appendChild).toHaveBeenCalledTimes(1);
+    expect(replacementScript).toBeDefined();
+    replacementScript.onload();
+
+    await expectAsync(retry).toBeResolved();
+  });
+
+  it('rejects concurrent loads that reuse the same provider callback name', async () => {
+    const appendedScripts: any[] = [];
+    const fakeDocument = {
+      querySelectorAll: () => [],
+      createElement: () => ({ dataset: {} }),
+      body: {
+        appendChild: (script: any) => appendedScripts.push(script),
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const first = service.loadScript('https://example.test/first.js', 'sharedCallback');
+    const second = service.loadScript('https://example.test/second.js', 'sharedCallback');
+
+    await expectAsync(second).toBeRejectedWithError(
+      'CAPTCHA script callback "sharedCallback" is already in use',
+    );
+    expect(appendedScripts.length).toBe(1);
+
+    appendedScripts[0].onload();
+    await expectAsync(first).toBeResolved();
+    expect((window as any).sharedCallback).toBeUndefined();
+  });
+
+  it('settles a named script load when onload fires without the provider callback', async () => {
+    let appendedScript: any;
+    const fakeDocument = {
+      querySelectorAll: () => [],
+      createElement: () => ({ dataset: {} }),
+      body: {
+        appendChild: (script: any) => {
+          appendedScript = script;
+        },
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const promise = service.loadScript('https://example.test/no-callback.js', 'neverCalled');
+    appendedScript.onload();
+
+    await expectAsync(promise).toBeResolved();
+    expect((window as any).neverCalled).toBeUndefined();
+  });
+
+  it('settles and restores a provider callback even when the previous callback throws', async () => {
+    let appendedScript: any;
+    const previousCallback = jasmine.createSpy('previousCallback').and.throwError('host callback failed');
+    (window as any).existingCallback = previousCallback;
+    const fakeDocument = {
+      querySelectorAll: () => [],
+      createElement: () => ({ dataset: {} }),
+      body: {
+        appendChild: (script: any) => {
+          appendedScript = script;
+        },
+      },
+    };
+    const service = new CaptchaService(fakeDocument as any, 'browser');
+
+    const promise = service.loadScript('https://example.test/callback.js', 'existingCallback');
+    expect(() => (window as any).existingCallback('value')).toThrowError('host callback failed');
+
+    await expectAsync(promise).toBeResolved();
+    expect(previousCallback).toHaveBeenCalledOnceWith('value');
+    expect((window as any).existingCallback).toBe(previousCallback);
+    expect(appendedScript).toBeDefined();
+  });
+
+  it('does not cache a host lookup failure and allows a later retry', async () => {
+    let appendedScript: any;
+    const fakeDocument: any = {
+      querySelectorAll: () => [],
+      createElement: () => ({ dataset: {} }),
+    };
+    const service = new CaptchaService(fakeDocument, 'browser');
+
+    await expectAsync(service.loadScript('https://example.test/retry.js'))
+      .toBeRejectedWithError('Unable to find a document host for the CAPTCHA script');
+
+    fakeDocument.body = {
+      appendChild: (script: any) => {
+        appendedScript = script;
+      },
+    };
+    const retry = service.loadScript('https://example.test/retry.js');
+    expect(appendedScript).toBeDefined();
+    appendedScript.onload();
+
+    await expectAsync(retry).toBeResolved();
+  });
+
+  it('rejects provider execution outside the browser', async () => {
+    const service = new CaptchaService({} as any, 'server');
+
+    await expectAsync(service.executeRecaptchaV3('site-key', 'submit'))
+      .toBeRejectedWithError('reCAPTCHA v3 execution is only available in a browser');
+    await expectAsync(service.executeTurnstile('site-key'))
+      .toBeRejectedWithError('Turnstile execution is only available in a browser');
+    await expectAsync(service.executeAlibabaCaptcha('scene-id', {
+      element: '#captcha-element',
+      button: '#submit-button',
+      captchaVerifyCallback: () => ({ captchaResult: true }),
+      prefix: 'prefix',
+    })).toBeRejectedWithError('Alibaba Captcha 2.0 execution is only available in a browser');
   });
 
   it('creates container ids from the service instance', () => {
@@ -348,16 +873,65 @@ describe('CaptchaService', () => {
     expect(secondService.createContainerId()).toBe('captcha-container-0');
   });
 
+  it('reuses an explicitly rendered reCAPTCHA v3 widget across service executions', async () => {
+    const service = new CaptchaService(document, 'browser');
+    spyOn(service, 'loadScript').and.resolveTo();
+    let renderedContainer: HTMLElement | undefined;
+    (window as any).grecaptcha = {
+      ready: (callback: () => void) => callback(),
+      render: jasmine.createSpy('render').and.callFake((container: HTMLElement) => {
+        renderedContainer = container;
+        return 23;
+      }),
+      execute: jasmine.createSpy('execute').and.callFake((_widgetId: number, options: { action: string }) => (
+        Promise.resolve(`${options.action}-token`)
+      )),
+      reset: jasmine.createSpy('reset'),
+    };
+
+    const firstToken = await service.executeRecaptchaV3('site-key', 'first', 'en');
+    const secondToken = await service.executeRecaptchaV3('site-key', 'second', 'en');
+
+    expect(firstToken).toBe('first-token');
+    expect(secondToken).toBe('second-token');
+    expect(service.loadScript).toHaveBeenCalledTimes(2);
+    expect(service.loadScript).toHaveBeenCalledWith(
+      'https://www.google.com/recaptcha/api.js?render=explicit',
+      undefined,
+      'en',
+    );
+    expect((window as any).grecaptcha.render).toHaveBeenCalledWith(
+      jasmine.any(HTMLElement),
+      { sitekey: 'site-key', size: 'invisible' },
+    );
+    expect((window as any).grecaptcha.render).toHaveBeenCalledTimes(1);
+    expect((window as any).grecaptcha.execute).toHaveBeenCalledWith(23, { action: 'first' });
+    expect((window as any).grecaptcha.execute).toHaveBeenCalledWith(23, { action: 'second' });
+    expect((window as any).grecaptcha.execute).toHaveBeenCalledTimes(2);
+    expect((window as any).grecaptcha.reset).not.toHaveBeenCalled();
+    expect(renderedContainer?.isConnected).toBeTrue();
+    expect(renderedContainer?.hidden).toBeFalse();
+
+    service.ngOnDestroy();
+
+    expect((window as any).grecaptcha.reset).toHaveBeenCalledOnceWith(23);
+    expect(renderedContainer?.isConnected).toBeFalse();
+  });
+
   it('renders Turnstile into a custom element when executing through the service', async () => {
     const service = new CaptchaService({} as any, 'browser');
     spyOn(service, 'loadScript').and.resolveTo();
     const customElement = document.createElement('div');
     let renderOptions: any;
+    let nextWidgetId = 0;
     (window as any).turnstile = {
       ready: (callback: () => void) => callback(),
       render: jasmine.createSpy('render').and.callFake((_element: HTMLElement, options: any) => {
         renderOptions = options;
+        nextWidgetId += 1;
+        return `widget-${nextWidgetId}`;
       }),
+      remove: jasmine.createSpy('remove'),
     };
 
     const promise = service.executeTurnstile('site-key', 'submit', 'payload', customElement);
@@ -373,6 +947,17 @@ describe('CaptchaService', () => {
       action: 'submit',
       cData: 'payload',
     }));
+    expect((window as any).turnstile.remove).toHaveBeenCalledOnceWith('widget-1');
+
+    const secondPromise = service.executeTurnstile('site-key', 'submit', 'payload', customElement);
+    await Promise.resolve();
+    await Promise.resolve();
+    renderOptions.callback('second-token');
+
+    await expectAsync(secondPromise).toBeResolvedTo('second-token');
+    expect((window as any).turnstile.render).toHaveBeenCalledTimes(2);
+    expect((window as any).turnstile.remove).toHaveBeenCalledWith('widget-2');
+    expect((window as any).turnstile.remove).toHaveBeenCalledTimes(2);
   });
 
   it('initializes Alibaba Captcha 2.0 through the service', async () => {

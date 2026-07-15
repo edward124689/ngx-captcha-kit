@@ -1,14 +1,24 @@
-<!--<captcha-kit-->
-<!--  type="recaptcha-v2"-->
-<!--  siteKey="123456789">-->
-<!--</captcha-kit>-->
-<!--<captcha-kit-->
-<!--  type="turnstile"-->
-<!--  siteKey="123456789">-->
-<!--</captcha-kit>-->
-<captcha-kit
-  [sceneId]="'1123123'"
-  [prefix]="'123213'"
-  type="alibaba"
-  siteKey="123456789">
-</captcha-kit>
+<main>
+  <h1>ngx-captcha-kit demo</h1>
+  <p>This demo uses Cloudflare's always-pass test site key.</p>
+
+  <section>
+    <h2>Cloudflare Turnstile</h2>
+    <captcha-kit
+      type="turnstile"
+      siteKey="1x00000000000000000000AA"
+      theme="auto"
+      size="flexible"
+      language="auto"
+      (resolved)="onResolved($event)"
+      (error)="onError($event)"
+    />
+  </section>
+
+  @if (token()) {
+    <p class="success" aria-live="polite">Token received successfully.</p>
+  }
+  @if (errorMessage()) {
+    <p class="error" role="alert">{{ errorMessage() }}</p>
+  }
+</main>

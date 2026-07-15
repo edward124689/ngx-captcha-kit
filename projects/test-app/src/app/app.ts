@@ -1,13 +1,22 @@
 import { Component, signal } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
-import {NgxCaptchaKitModule} from '../../../ngx-captcha-kit/src/lib/ngx-captcha-kit.module';
+import { NgxCaptchaKitModule } from 'ngx-captcha-kit';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet,NgxCaptchaKitModule],
+  imports: [NgxCaptchaKitModule],
   templateUrl: './app.html',
   styleUrl: './app.css'
 })
 export class App {
-  protected readonly title = signal('test-app');
+  readonly token = signal('');
+  readonly errorMessage = signal('');
+
+  onResolved(token: string): void {
+    this.token.set(token);
+    this.errorMessage.set('');
+  }
+
+  onError(error: unknown): void {
+    this.errorMessage.set(error instanceof Error ? error.message : String(error));
+  }
 }

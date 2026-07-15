@@ -1,12 +1,18 @@
 {
   "name": "ngx-captcha-kit-workspace",
-  "version": "22.1.0",
+  "version": "22.2.0",
+  "description": "Workspace for the ngx-captcha-kit Angular CAPTCHA integration library.",
   "scripts": {
     "ng": "ng",
-    "start": "ng serve",
+    "start": "npm run build && ng serve test-app",
     "build": "ng build ngx-captcha-kit",
+    "build:demo": "ng build test-app",
     "watch": "ng build ngx-captcha-kit --watch --configuration development",
-    "test": "ng test ngx-captcha-kit"
+    "test": "ng test ngx-captcha-kit",
+    "test:ci": "ng test ngx-captcha-kit --watch=false --browsers=ChromeHeadless",
+    "test:demo:ci": "ng test test-app --watch=false --browsers=ChromeHeadless",
+    "audit:prod": "npm audit --omit=dev",
+    "ci": "npm run build && npm run test:ci && npm run build:demo && npm run test:demo:ci && npm run audit:prod"
   },
   "prettier": {
     "overrides": [
@@ -20,20 +26,20 @@
   },
   "private": true,
   "dependencies": {
-    "@angular/common": "^22.0.0",
-    "@angular/compiler": "^22.0.0",
-    "@angular/core": "^22.0.0",
-    "@angular/forms": "^22.0.0",
-    "@angular/platform-browser": "^22.0.0",
-    "@angular/router": "^22.0.0",
+    "@angular/common": "^22.0.6",
+    "@angular/compiler": "^22.0.6",
+    "@angular/core": "^22.0.6",
+    "@angular/forms": "^22.0.6",
+    "@angular/platform-browser": "^22.0.6",
+    "@angular/router": "^22.0.6",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
     "zone.js": "~0.16.0"
   },
   "devDependencies": {
-    "@angular/build": "^22.0.0",
-    "@angular/cli": "^22.0.0",
-    "@angular/compiler-cli": "^22.0.0",
+    "@angular/build": "^22.0.6",
+    "@angular/cli": "^22.0.6",
+    "@angular/compiler-cli": "^22.0.6",
     "@types/jasmine": "~5.1.0",
     "jasmine-core": "~5.8.0",
     "karma": "~6.4.0",
@@ -41,8 +47,11 @@
     "karma-coverage": "~2.2.0",
     "karma-jasmine": "~5.1.0",
     "karma-jasmine-html-reporter": "~2.1.0",
-    "ng-packagr": "^22.0.0",
+    "ng-packagr": "^22.0.1",
     "typescript": "~6.0.3"
+  },
+  "engines": {
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "repository": {
     "type": "git",

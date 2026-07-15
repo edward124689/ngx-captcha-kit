@@ -1,6 +1,7 @@
 {
   "name": "ngx-captcha-kit",
-  "version": "22.1.0",
+  "version": "22.2.0",
+  "description": "Unified Angular integration for Google reCAPTCHA, Cloudflare Turnstile, and Alibaba Cloud Captcha 2.0.",
   "peerDependencies": {
     "@angular/common": "^22.0.0",
     "@angular/core": "^22.0.0"
