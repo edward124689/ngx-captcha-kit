@@ -9,8 +9,21 @@ updates:
         patterns:
           - "@angular/*"
           - "ng-packagr"
+      test-tooling:
+        patterns:
+          - "@types/jasmine"
+          - "jasmine-core"
+          - "karma*"
+    ignore:
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    groups:
+      actions:
+        patterns:
+          - "*"
