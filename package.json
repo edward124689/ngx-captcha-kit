@@ -6,13 +6,14 @@
     "ng": "ng",
     "start": "npm run build && ng serve test-app",
     "build": "ng build ngx-captcha-kit",
+    "pack:check": "npm pack ./dist/ngx-captcha-kit --dry-run --json",
     "build:demo": "ng build test-app",
     "watch": "ng build ngx-captcha-kit --watch --configuration development",
     "test": "ng test ngx-captcha-kit",
     "test:ci": "ng test ngx-captcha-kit --watch=false --browsers=ChromeHeadless",
     "test:demo:ci": "ng test test-app --watch=false --browsers=ChromeHeadless",
     "audit:prod": "npm audit --omit=dev",
-    "ci": "npm run build && npm run test:ci && npm run build:demo && npm run test:demo:ci && npm run audit:prod"
+    "ci": "npm run build && npm run pack:check && npm run test:ci && npm run build:demo && npm run test:demo:ci && npm run audit:prod"
   },
   "prettier": {
     "overrides": [
@@ -26,12 +27,12 @@
   },
   "private": true,
   "dependencies": {
-    "@angular/common": "^22.0.6",
-    "@angular/compiler": "^22.0.6",
-    "@angular/core": "^22.0.6",
-    "@angular/forms": "^22.0.6",
-    "@angular/platform-browser": "^22.0.6",
-    "@angular/router": "^22.0.6",
+    "@angular/common": "^22.0.7",
+    "@angular/compiler": "^22.0.7",
+    "@angular/core": "^22.0.7",
+    "@angular/forms": "^22.0.7",
+    "@angular/platform-browser": "^22.0.7",
+    "@angular/router": "^22.0.7",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
     "zone.js": "~0.16.0"
@@ -39,7 +40,7 @@
   "devDependencies": {
     "@angular/build": "^22.0.7",
     "@angular/cli": "^22.0.7",
-    "@angular/compiler-cli": "^22.0.6",
+    "@angular/compiler-cli": "^22.0.7",
     "@types/jasmine": "~6.0.0",
     "jasmine-core": "~6.3.0",
     "karma": "~6.4.0",

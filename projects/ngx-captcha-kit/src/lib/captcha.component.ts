@@ -1,8 +1,9 @@
 import { isPlatformBrowser } from '@angular/common';
-import { Component, Input, Output, EventEmitter, AfterViewInit, ElementRef, OnDestroy, ViewChild, Inject, PLATFORM_ID } from '@angular/core';
+import { Component, Input, Output, EventEmitter, AfterViewInit, ElementRef, OnChanges, OnDestroy, SimpleChanges, ViewChild, Inject, PLATFORM_ID } from '@angular/core';
 import {
   AlibabaCaptchaInstance,
   AlibabaCaptchaMode,
+  AlibabaCaptchaRegion,
   AlibabaCaptchaSlideStyle,
   AlibabaCaptchaVerifyCallback,
   AlibabaCaptchaVerifyResult,
@@ -18,6 +19,7 @@ export type TurnstileExecution = 'render' | 'execute';
 export type TurnstileAppearance = 'always' | 'execute' | 'interaction-only';
 
 type PendingExecution = {
+  version: number;
   resolve: (token: string) => void;
   reject: (error: unknown) => void;
 };
@@ -27,7 +29,7 @@ type PendingExecution = {
   selector: 'captcha-kit',
   template: `<div #container [id]="containerId" [class]="getClass()"></div>`,
 })
-export class CaptchaComponent implements AfterViewInit, OnDestroy {
+export class CaptchaComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() type: CaptchaType | undefined;
   @Input() siteKey?: string;
   @Input() sceneId?: string;
@@ -62,72 +64,111 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
 
   containerId: string;
   private widgetId?: string | number;
+  private alibabaInstance?: AlibabaCaptchaInstance;
+  private renderedType?: CaptchaType;
   private isReady = false;
+  private viewInitialized = false;
   private destroyed = false;
+  private initializationVersion = 0;
+  private initializationTask: Promise<void> = Promise.resolve();
+  private pendingRecaptchaV3Executions = new Set<PendingExecution>();
   private pendingInvisibleV2Execution?: PendingExecution;
   private pendingTurnstileExecution?: PendingExecution;
+  private el: ElementRef<HTMLElement>;
 
   constructor(
     private captchaService: CaptchaService,
-    private el: ElementRef<HTMLElement>,
+    el: ElementRef,
     @Inject(PLATFORM_ID) private platformId: Object
   ) {
+    this.el = el as ElementRef<HTMLElement>;
     this.containerId = this.captchaService.createContainerId();
   }
 
-  async ngAfterViewInit() {
-    if (!isPlatformBrowser(this.platformId)) {
-      return;
-    }
+  async ngAfterViewInit(): Promise<void> {
+    this.viewInitialized = true;
+    this.initializationTask = this.reinitialize();
+    await this.initializationTask;
+  }
 
-    if (!this.type) {
+  ngOnChanges(_changes: SimpleChanges): void {
+    if (!this.viewInitialized || this.destroyed) return;
+    if (!this.shouldReinitialize(_changes)) return;
+    this.initializationTask = this.reinitialize();
+  }
+
+  private async reinitialize(): Promise<void> {
+    const version = ++this.initializationVersion;
+    this.teardownWidget(new Error('Captcha component reinitialized before execution completed'));
+    await this.initialize(version);
+  }
+
+  private async initialize(version: number): Promise<void> {
+    if (!isPlatformBrowser(this.platformId) || !this.isInitializationCurrent(version)) return;
+
+    const type = this.type;
+    if (!type) {
       this.emitError('Type is required');
       return;
     }
 
-    if (this.requiresSiteKey(this.type) && !this.siteKey) {
-      this.emitError(`siteKey is required for ${this.type}`);
+    if (this.requiresSiteKey(type) && !this.siteKey) {
+      this.emitError(`siteKey is required for ${type}`);
       return;
     }
 
-    if (this.type === 'recaptcha-v2' && this.size === 'flexible') {
+    if (type === 'recaptcha-v2' && this.size === 'flexible') {
       this.emitError('reCAPTCHA v2 does not support size="flexible"');
+      return;
+    }
+    if (type === 'turnstile' && this.size === 'invisible') {
+      this.emitError('Turnstile does not support size="invisible"');
       return;
     }
 
     try {
-      switch (this.type) {
+      switch (type) {
         case 'recaptcha-v2':
           await this.captchaService.loadScript('https://www.google.com/recaptcha/api.js?render=explicit', undefined, this.language);
-          if (this.destroyed) return;
+          if (!this.isInitializationCurrent(version)) return;
           this.widgetId = this.getRecaptcha().render(this.getContainerElement(), {
             sitekey: this.siteKey,
             theme: this.getRecaptchaTheme(),
             size: this.size,
-            callback: (token: string) => this.emitResolved(token),
-            'error-callback': (err: unknown) => this.emitError(err),
-            'expired-callback': () => this.emitError(new Error('reCAPTCHA challenge expired')),
+            callback: (token: string) => {
+              if (this.isInitializationCurrent(version)) this.emitResolved(token);
+            },
+            'error-callback': (err: unknown) => {
+              if (this.isInitializationCurrent(version)) this.emitError(err);
+            },
+            'expired-callback': () => {
+              if (this.isInitializationCurrent(version)) {
+                this.emitError(new Error('reCAPTCHA challenge expired'));
+              }
+            },
           });
+          this.renderedType = type;
           break;
 
         case 'recaptcha-v3':
           await this.captchaService.loadScript('https://www.google.com/recaptcha/api.js?render=explicit', undefined, this.language);
-          if (this.destroyed) return;
+          if (!this.isInitializationCurrent(version)) return;
           await new Promise<void>(resolve => this.getRecaptcha().ready(resolve));
-          if (this.destroyed) return;
+          if (!this.isInitializationCurrent(version)) return;
           this.widgetId = this.getRecaptcha().render(this.getContainerElement(), {
             sitekey: this.siteKey,
             size: 'invisible',
             theme: this.getRecaptchaTheme(),
           });
+          this.renderedType = type;
           this.isReady = true;
           break;
 
         case 'turnstile':
           await this.captchaService.loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
-          if (this.destroyed) return;
+          if (!this.isInitializationCurrent(version)) return;
           await this.waitForTurnstileReady();
-          if (this.destroyed) return;
+          if (!this.isInitializationCurrent(version)) return;
           this.widgetId = this.getTurnstile().render(this.getContainerElement(), {
             sitekey: this.siteKey,
             action: this.action,
@@ -137,37 +178,40 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
             language: this.language,
             execution: this.execution,
             appearance: this.appearance,
-            callback: (token: string) => this.emitResolved(token),
-            'error-callback': (err: unknown) => this.emitError(err),
-            'expired-callback': () => this.handleTurnstileExpired(),
-            'timeout-callback': () => this.handleTurnstileTimeout(),
+            callback: (token: string) => {
+              if (this.isInitializationCurrent(version)) this.emitResolved(token);
+            },
+            'error-callback': (err: unknown) => {
+              if (this.isInitializationCurrent(version)) this.emitError(err);
+              return true;
+            },
+            'expired-callback': () => {
+              if (this.isInitializationCurrent(version)) this.handleTurnstileExpired();
+            },
+            'timeout-callback': () => {
+              if (this.isInitializationCurrent(version)) this.handleTurnstileTimeout();
+            },
           });
+          this.renderedType = type;
           break;
 
         case 'alibaba':
-          await this.initAlibabaCaptcha();
+          if (await this.initAlibabaCaptcha(version) && this.isInitializationCurrent(version)) {
+            this.renderedType = type;
+          }
           break;
 
         default:
           this.emitError('Unsupported type');
       }
     } catch (err) {
-      this.emitError(err);
+      if (this.isInitializationCurrent(version)) this.emitError(err);
     }
   }
 
   async execute(): Promise<string> {
     if (this.type === 'recaptcha-v3') {
-      if (!this.isReady || this.widgetId === undefined) {
-        throw new Error('reCAPTCHA v3 not ready or missing siteKey');
-      }
-      const execution = this.getRecaptcha().execute(this.widgetId, { action: this.action });
-      if (!execution) {
-        throw new Error('reCAPTCHA v3 execute did not return a token promise');
-      }
-      const token = await Promise.resolve(execution);
-      this.emitResolved(token);
-      return token;
+      return this.executeRecaptchaV3();
     }
 
     if (this.type === 'recaptcha-v2') {
@@ -183,34 +227,84 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy() {
     this.destroyed = true;
-
-    if (this.pendingInvisibleV2Execution) {
-      this.pendingInvisibleV2Execution.reject(new Error('Captcha component destroyed before execution completed'));
-      this.pendingInvisibleV2Execution = undefined;
-    }
-    if (this.pendingTurnstileExecution) {
-      this.pendingTurnstileExecution.reject(new Error('Captcha component destroyed before execution completed'));
-      this.pendingTurnstileExecution = undefined;
-    }
-
-    if (!isPlatformBrowser(this.platformId)) {
-      return;
-    }
-
-    const browserWindow = window as Window & { grecaptcha?: RecaptchaApi; turnstile?: TurnstileApi };
-    if ((this.type === 'recaptcha-v2' || this.type === 'recaptcha-v3') && this.widgetId !== undefined && browserWindow.grecaptcha?.reset) {
-      browserWindow.grecaptcha.reset(this.widgetId);
-    } else if (this.type === 'turnstile' && this.widgetId !== undefined && browserWindow.turnstile?.remove) {
-      browserWindow.turnstile.remove(this.widgetId);
-    }
+    ++this.initializationVersion;
+    this.teardownWidget(new Error('Captcha component destroyed before execution completed'));
   }
 
   public getClass(): string {
     return this.type === 'recaptcha-v2' ? 'g-recaptcha' : '';
   }
 
+  private isInitializationCurrent(version: number): boolean {
+    return !this.destroyed && version === this.initializationVersion;
+  }
+
+  private shouldReinitialize(changes: SimpleChanges): boolean {
+    const configurationInputs = [
+      'type', 'siteKey', 'sceneId', 'prefix', 'region', 'action', 'theme', 'size', 'mode', 'cData',
+      'language', 'execution', 'appearance', 'button', 'slideStyle', 'immediate', 'timeout', 'rem',
+      'autoRefresh', 'captchaLogoImg',
+    ];
+    return configurationInputs.some(input => {
+      const change = changes[input];
+      if (!change) return false;
+      if (input === 'language' && this.isGoogleRecaptcha(this.type)) return false;
+      if (input !== 'slideStyle') return true;
+
+      const previous = change.previousValue as AlibabaCaptchaSlideStyle | undefined;
+      const current = change.currentValue as AlibabaCaptchaSlideStyle | undefined;
+      return previous?.width !== current?.width || previous?.height !== current?.height;
+    });
+  }
+
+  private teardownWidget(reason: Error): void {
+    this.rejectPendingExecutions(reason);
+    this.isReady = false;
+
+    const renderedType = this.renderedType;
+    const widgetId = this.widgetId;
+    const alibabaInstance = this.alibabaInstance;
+    this.renderedType = undefined;
+    this.widgetId = undefined;
+    this.alibabaInstance = undefined;
+
+    this.destroyAlibabaInstance(alibabaInstance);
+
+    if (isPlatformBrowser(this.platformId) && widgetId !== undefined) {
+      const browserWindow = window as Window & { grecaptcha?: RecaptchaApi; turnstile?: TurnstileApi };
+      try {
+        if (renderedType === 'recaptcha-v2' || renderedType === 'recaptcha-v3') {
+          browserWindow.grecaptcha?.reset?.(widgetId);
+        } else if (renderedType === 'turnstile') {
+          browserWindow.turnstile?.remove?.(widgetId);
+        }
+      } catch {
+        // Provider cleanup must not block reinitialization or component destruction.
+      }
+    }
+
+    if (isPlatformBrowser(this.platformId)) {
+      this.containerRef?.nativeElement.replaceChildren();
+    }
+  }
+
+  private rejectPendingExecutions(reason: Error): void {
+    for (const pending of this.pendingRecaptchaV3Executions) {
+      pending.reject(reason);
+    }
+    this.pendingRecaptchaV3Executions.clear();
+    this.pendingInvisibleV2Execution?.reject(reason);
+    this.pendingInvisibleV2Execution = undefined;
+    this.pendingTurnstileExecution?.reject(reason);
+    this.pendingTurnstileExecution = undefined;
+  }
+
   private requiresSiteKey(type: CaptchaType): boolean {
     return type === 'recaptcha-v2' || type === 'recaptcha-v3' || type === 'turnstile';
+  }
+
+  private isGoogleRecaptcha(type: CaptchaType | undefined): boolean {
+    return type === 'recaptcha-v2' || type === 'recaptcha-v3';
   }
 
   private getContainerElement(): HTMLElement {
@@ -245,6 +339,48 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
     }
   }
 
+  private executeRecaptchaV3(): Promise<string> {
+    if (!this.isReady || this.widgetId === undefined) {
+      throw new Error('reCAPTCHA v3 not ready or missing siteKey');
+    }
+
+    const execution = this.getRecaptcha().execute(this.widgetId, { action: this.action });
+    if (!execution) {
+      throw new Error('reCAPTCHA v3 execute did not return a token promise');
+    }
+
+    const version = this.initializationVersion;
+    return new Promise<string>((resolve, reject) => {
+      const pending: PendingExecution = { version, resolve, reject };
+      this.pendingRecaptchaV3Executions.add(pending);
+      Promise.resolve(execution).then(
+        token => this.resolveRecaptchaV3Execution(pending, token),
+        error => this.rejectRecaptchaV3Execution(pending, error),
+      );
+    });
+  }
+
+  private resolveRecaptchaV3Execution(pending: PendingExecution, token: string): void {
+    if (!this.pendingRecaptchaV3Executions.delete(pending)) return;
+    if (!this.isInitializationCurrent(pending.version)) {
+      pending.reject(new Error('reCAPTCHA v3 execution completed after the widget was replaced'));
+      return;
+    }
+
+    pending.resolve(token);
+    this.emitResolved(token);
+  }
+
+  private rejectRecaptchaV3Execution(pending: PendingExecution, error: unknown): void {
+    if (!this.pendingRecaptchaV3Executions.delete(pending)) return;
+    if (!this.isInitializationCurrent(pending.version)) {
+      pending.reject(new Error('reCAPTCHA v3 execution failed after the widget was replaced'));
+      return;
+    }
+
+    pending.reject(error);
+  }
+
   private executeInvisibleRecaptchaV2(): Promise<string> {
     if (this.size !== 'invisible') {
       throw new Error('reCAPTCHA v2 execute() requires size="invisible"');
@@ -262,18 +398,35 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
     }
 
     const widgetId = this.widgetId;
+    const version = this.initializationVersion;
     return new Promise<string>((resolve, reject) => {
-      this.pendingInvisibleV2Execution = { resolve, reject };
+      const pending: PendingExecution = { version, resolve, reject };
+      this.pendingInvisibleV2Execution = pending;
       try {
         const result = recaptcha.execute(widgetId);
         if (result && typeof result.then === 'function') {
-          result.then((token: string) => this.emitResolved(token), (err: unknown) => this.emitError(err));
+          result.then(
+            (token: string) => this.resolveInvisibleV2Thenable(pending, token),
+            (error: unknown) => this.rejectInvisibleV2Thenable(pending, error),
+          );
         }
       } catch (err) {
-        this.pendingInvisibleV2Execution = undefined;
+        if (this.pendingInvisibleV2Execution === pending) {
+          this.pendingInvisibleV2Execution = undefined;
+        }
         reject(err);
       }
     });
+  }
+
+  private resolveInvisibleV2Thenable(pending: PendingExecution, token: string): void {
+    if (this.pendingInvisibleV2Execution !== pending || !this.isInitializationCurrent(pending.version)) return;
+    this.emitResolved(token);
+  }
+
+  private rejectInvisibleV2Thenable(pending: PendingExecution, error: unknown): void {
+    if (this.pendingInvisibleV2Execution !== pending || !this.isInitializationCurrent(pending.version)) return;
+    this.emitError(error);
   }
 
   private executeTurnstile(): Promise<string> {
@@ -288,8 +441,9 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
     }
 
     const widgetId = this.widgetId;
+    const version = this.initializationVersion;
     return new Promise<string>((resolve, reject) => {
-      this.pendingTurnstileExecution = { resolve, reject };
+      this.pendingTurnstileExecution = { version, resolve, reject };
       try {
         this.getTurnstile().execute(widgetId);
       } catch (err) {
@@ -299,30 +453,22 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
     });
   }
 
-  private async initAlibabaCaptcha(): Promise<void> {
+  private async initAlibabaCaptcha(version: number): Promise<boolean> {
     if (!this.validateAlibabaInputs()) {
-      return;
+      return false;
     }
 
     const alibabaMode = this.getAlibabaMode();
-    if (!alibabaMode) return;
+    if (!alibabaMode) return false;
 
-    const browserWindow = window as Window & {
-      AliyunCaptchaConfig?: { region: string; prefix?: string };
-      initAliyunCaptcha?: (options: Record<string, unknown>) => void;
-    };
-    browserWindow.AliyunCaptchaConfig = {
-      region: this.region || 'cn',
-      prefix: this.prefix,
-    };
+    const region = (this.region ?? 'cn') as AlibabaCaptchaRegion;
+    await this.captchaService.loadAlibabaScript(region, this.prefix!);
+    if (!this.isInitializationCurrent(version)) return false;
 
-    await this.captchaService.loadScript('https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js');
-    if (this.destroyed) return;
-
+    const browserWindow = window as Window & { initAliyunCaptcha?: (options: Record<string, unknown>) => void };
     const initAliyunCaptcha = browserWindow.initAliyunCaptcha;
     if (typeof initAliyunCaptcha !== 'function') {
-      this.emitError('AliyunCaptcha script loaded but initAliyunCaptcha not defined. Check console for errors.');
-      return;
+      throw new Error('AliyunCaptcha script loaded but initAliyunCaptcha not defined. Check console for errors.');
     }
 
     initAliyunCaptcha({
@@ -330,18 +476,19 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
       mode: alibabaMode,
       element: `#${this.containerId}`,
       button: this.button,
-      captchaVerifyCallback: (param: string) => this.handleAlibabaVerify(param),
-      onBizResultCallback: (result: boolean | undefined) => this.handleAlibabaBizResult(result),
-      getInstance: (instance: AlibabaCaptchaInstance) => this.handleAlibabaInstance(instance),
+      captchaVerifyCallback: (param: string) => this.handleAlibabaVerify(param, version),
+      onBizResultCallback: (result: boolean | undefined) => this.handleAlibabaBizResult(result, version),
+      getInstance: (instance: AlibabaCaptchaInstance) => this.handleAlibabaInstance(instance, version),
       slideStyle: this.slideStyle,
       language: this.normalizeAlibabaLanguage(this.language),
       immediate: this.immediate,
       timeout: this.timeout,
       rem: this.rem,
       autoRefresh: this.autoRefresh,
-      onError: (err: unknown) => this.handleAlibabaError(err),
+      onError: (err: unknown) => this.handleAlibabaError(err, version),
       captchaLogoImg: this.captchaLogoImg,
     });
+    return true;
   }
 
   private validateAlibabaInputs(): boolean {
@@ -357,6 +504,11 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
       this.emitError('captchaVerifyCallback is required for Alibaba Captcha 2.0');
       return false;
     }
+    const region = this.region ?? 'cn';
+    if (region !== 'cn' && region !== 'sgp') {
+      this.emitError('Alibaba Captcha 2.0 region must be "cn" or "sgp"');
+      return false;
+    }
     return true;
   }
 
@@ -369,43 +521,74 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
     return mode;
   }
 
-  private async handleAlibabaVerify(captchaVerifyParam: string): Promise<AlibabaCaptchaVerifyResult> {
-    if (this.destroyed) {
+  private async handleAlibabaVerify(captchaVerifyParam: string, version: number): Promise<AlibabaCaptchaVerifyResult> {
+    if (!this.isInitializationCurrent(version)) {
       return { captchaResult: false, bizResult: false };
     }
 
+    const verifyCallback = this.captchaVerifyCallback;
     this.emitResolved(captchaVerifyParam);
+    if (!this.isInitializationCurrent(version)) {
+      return { captchaResult: false, bizResult: false };
+    }
 
     try {
-      const result = await this.captchaVerifyCallback?.(captchaVerifyParam);
+      const result = await verifyCallback?.(captchaVerifyParam);
+      if (!this.isInitializationCurrent(version)) {
+        return { captchaResult: false, bizResult: false };
+      }
       if (!result || typeof result.captchaResult !== 'boolean') {
         throw new Error('Alibaba captchaVerifyCallback must return { captchaResult: boolean, bizResult?: boolean }');
       }
       return result;
     } catch (err) {
+      if (!this.isInitializationCurrent(version)) {
+        return { captchaResult: false, bizResult: false };
+      }
       this.emitError(err);
       return { captchaResult: false, bizResult: false };
     }
   }
 
-  private handleAlibabaBizResult(result: boolean | undefined): void {
-    if (this.destroyed) return;
+  private handleAlibabaBizResult(result: boolean | undefined, version: number): void {
+    if (!this.isInitializationCurrent(version)) return;
 
+    const callback = this.onBizResultCallback;
     this.bizResult.emit(result);
-    this.onBizResultCallback?.(result);
+    if (!this.isInitializationCurrent(version)) return;
+    callback?.(result);
   }
 
-  private handleAlibabaInstance(instance: AlibabaCaptchaInstance): void {
-    if (this.destroyed) return;
+  private handleAlibabaInstance(instance: AlibabaCaptchaInstance, version: number): void {
+    if (!this.isInitializationCurrent(version)) {
+      this.destroyAlibabaInstance(instance);
+      return;
+    }
+
+    const previousInstance = this.alibabaInstance;
+    this.alibabaInstance = instance;
+    if (previousInstance && previousInstance !== instance) {
+      this.destroyAlibabaInstance(previousInstance);
+    }
 
     this.getInstance?.(instance);
   }
 
-  private handleAlibabaError(err: unknown): void {
-    if (this.destroyed) return;
+  private destroyAlibabaInstance(instance: AlibabaCaptchaInstance | undefined): void {
+    try {
+      instance?.destroyCaptcha?.();
+    } catch {
+      // Provider cleanup must not block reinitialization or component destruction.
+    }
+  }
 
+  private handleAlibabaError(err: unknown, version: number): void {
+    if (!this.isInitializationCurrent(version)) return;
+
+    const callback = this.alibabaOnError;
     this.emitError(err);
-    this.alibabaOnError?.(err);
+    if (!this.isInitializationCurrent(version)) return;
+    callback?.(err);
   }
 
   private normalizeAlibabaLanguage(language: string | undefined): string {
@@ -432,47 +615,65 @@ export class CaptchaComponent implements AfterViewInit, OnDestroy {
 
   private handleTurnstileExpired(): void {
     if (this.destroyed) return;
-    this.expired.emit();
-    if (this.pendingTurnstileExecution) {
-      this.pendingTurnstileExecution.reject(new Error('Turnstile token expired'));
+    const pending = this.pendingTurnstileExecution?.version === this.initializationVersion
+      ? this.pendingTurnstileExecution
+      : undefined;
+    if (pending) {
       this.pendingTurnstileExecution = undefined;
+      pending.reject(new Error('Turnstile token expired'));
     }
+    this.expired.emit();
   }
 
   private handleTurnstileTimeout(): void {
     if (this.destroyed) return;
-    this.timedOut.emit();
-    if (this.pendingTurnstileExecution) {
-      this.pendingTurnstileExecution.reject(new Error('Turnstile challenge timed out'));
+    const pending = this.pendingTurnstileExecution?.version === this.initializationVersion
+      ? this.pendingTurnstileExecution
+      : undefined;
+    if (pending) {
       this.pendingTurnstileExecution = undefined;
+      pending.reject(new Error('Turnstile challenge timed out'));
     }
+    this.timedOut.emit();
   }
 
   private emitResolved(value: string): void {
     if (this.destroyed) return;
 
-    this.resolved.emit(value);
-    if (this.pendingInvisibleV2Execution) {
-      this.pendingInvisibleV2Execution.resolve(value);
+    const invisibleV2Execution = this.pendingInvisibleV2Execution?.version === this.initializationVersion
+      ? this.pendingInvisibleV2Execution
+      : undefined;
+    const turnstileExecution = this.pendingTurnstileExecution?.version === this.initializationVersion
+      ? this.pendingTurnstileExecution
+      : undefined;
+    if (invisibleV2Execution) {
       this.pendingInvisibleV2Execution = undefined;
+      invisibleV2Execution.resolve(value);
     }
-    if (this.pendingTurnstileExecution) {
-      this.pendingTurnstileExecution.resolve(value);
+    if (turnstileExecution) {
       this.pendingTurnstileExecution = undefined;
+      turnstileExecution.resolve(value);
     }
+    this.resolved.emit(value);
   }
 
   private emitError(err: unknown): void {
+    const invisibleV2Execution = this.pendingInvisibleV2Execution?.version === this.initializationVersion
+      ? this.pendingInvisibleV2Execution
+      : undefined;
+    const turnstileExecution = this.pendingTurnstileExecution?.version === this.initializationVersion
+      ? this.pendingTurnstileExecution
+      : undefined;
+    if (invisibleV2Execution) {
+      this.pendingInvisibleV2Execution = undefined;
+      invisibleV2Execution.reject(err);
+    }
+    if (turnstileExecution) {
+      this.pendingTurnstileExecution = undefined;
+      turnstileExecution.reject(err);
+    }
     if (!this.destroyed) {
       this.error.emit(err);
-    }
-    if (this.pendingInvisibleV2Execution) {
-      this.pendingInvisibleV2Execution.reject(err);
-      this.pendingInvisibleV2Execution = undefined;
-    }
-    if (this.pendingTurnstileExecution) {
-      this.pendingTurnstileExecution.reject(err);
-      this.pendingTurnstileExecution = undefined;
     }
   }
 }

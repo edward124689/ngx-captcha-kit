@@ -1,10 +1,16 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ElementRef } from '@angular/core';
+import { ElementRef, SimpleChange } from '@angular/core';
 import { CaptchaComponent } from './captcha.component';
-import { CaptchaService } from './captcha.service';
+import { AlibabaCaptchaOptions, AlibabaCaptchaRegion, CaptchaService } from './captcha.service';
 
 class MockCaptchaService {
   loadScript = jasmine.createSpy('loadScript').and.returnValue(Promise.resolve());
+  loadAlibabaScript = jasmine.createSpy('loadAlibabaScript').and.callFake(
+    (region: AlibabaCaptchaRegion, prefix: string) => {
+      (window as any).AliyunCaptchaConfig = { region, prefix };
+      return Promise.resolve();
+    },
+  );
   private nextContainerId = 0;
 
   createContainerId(): string {
@@ -67,6 +73,41 @@ describe('CaptchaComponent', () => {
     expect(first.containerId).not.toEqual(second.containerId);
   });
 
+  it('preserves the public input and output type compatibility from 22.1', () => {
+    createComponent();
+    const configuredRegion: string = 'cn';
+    component.region = configuredRegion;
+    component.mode = 'float';
+    component.getInstance = (instance: { reload(): void }) => instance.reload();
+    component.alibabaOnError = (error: Error) => error.message;
+
+    const resolvedSubscription = component.resolved.subscribe((value: number) => value.toFixed());
+    const errorSubscription = component.error.subscribe((error: Error) => error.message);
+    const options: AlibabaCaptchaOptions = {
+      element: '#captcha',
+      button: '#submit',
+      captchaVerifyCallback: () => ({ captchaResult: true }),
+      prefix: 'prefix',
+      region: configuredRegion,
+      getInstance: (instance: { reload(): void }) => instance.reload(),
+      onError: (error: Error) => error.message,
+    };
+
+    expect(options.region).toBe(configuredRegion);
+    resolvedSubscription.unsubscribe();
+    errorSubscription.unsubscribe();
+  });
+
+  it('preserves the public constructor type compatibility from 22.1', () => {
+    const service = new CaptchaService({ defaultView: window }, 'browser');
+    const svgElement = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const svgRef = new ElementRef<SVGElement>(svgElement);
+
+    const manuallyConstructed = new CaptchaComponent(service, svgRef, 'browser');
+
+    expect(manuallyConstructed.containerId).toBe('captcha-container-0');
+  });
+
   it('does not mark explicitly rendered Turnstile containers for implicit rendering', () => {
     createComponent();
     component.type = 'turnstile';
@@ -106,6 +147,39 @@ describe('CaptchaComponent', () => {
     expect(component.resolved.emit).toHaveBeenCalledOnceWith('v3-token');
   });
 
+  it('rejects and ignores a stale reCAPTCHA v3 execution after reinitialization', async () => {
+    createComponent();
+    spyOn(component.resolved, 'emit');
+    let resolveExecution!: (token: string) => void;
+    (window as any).grecaptcha = {
+      ready: (callback: () => void) => callback(),
+      render: jasmine.createSpy('render').and.returnValues(11, 12),
+      execute: jasmine.createSpy('execute').and.returnValue(new Promise<string>(resolve => {
+        resolveExecution = resolve;
+      })),
+      reset: jasmine.createSpy('reset'),
+    };
+    component.type = 'recaptcha-v3';
+    component.siteKey = 'first-site-key';
+    await initializeComponent();
+
+    const execution = component.execute();
+    component.siteKey = 'second-site-key';
+    component.ngOnChanges({
+      siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+    });
+
+    await expectAsync(execution).toBeRejectedWithError(
+      'Captcha component reinitialized before execution completed',
+    );
+    await (component as any).initializationTask;
+    resolveExecution('stale-token');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(component.resolved.emit).not.toHaveBeenCalled();
+  });
+
   it('supports execute() for invisible reCAPTCHA v2', async () => {
     createComponent();
     spyOn(component.resolved, 'emit');
@@ -131,6 +205,65 @@ describe('CaptchaComponent', () => {
     expect((window as any).grecaptcha.execute).toHaveBeenCalledOnceWith(7);
     expect(component.resolved.emit).toHaveBeenCalledOnceWith('v2-token');
     expect((window as any).ngRecaptchaOnload).toBeUndefined();
+  });
+
+  it('settles invisible reCAPTCHA v2 before a resolved subscriber reinitializes the component', async () => {
+    createComponent();
+    const renderOptions: any[] = [];
+    (window as any).grecaptcha = {
+      render: jasmine.createSpy('render').and.callFake((_element: HTMLElement, options: any) => {
+        renderOptions.push(options);
+        return renderOptions.length + 6;
+      }),
+      execute: jasmine.createSpy('execute'),
+      reset: jasmine.createSpy('reset'),
+    };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'first-site-key';
+    component.size = 'invisible';
+    await initializeComponent();
+    component.resolved.subscribe(() => {
+      component.siteKey = 'second-site-key';
+      component.ngOnChanges({
+        siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+      });
+    });
+
+    const execution = component.execute();
+    renderOptions[0].callback('valid-token');
+
+    await expectAsync(execution).toBeResolvedTo('valid-token');
+    await (component as any).initializationTask;
+  });
+
+  it('preserves the provider error when an error subscriber reinitializes the component', async () => {
+    createComponent();
+    const renderOptions: any[] = [];
+    (window as any).grecaptcha = {
+      render: jasmine.createSpy('render').and.callFake((_element: HTMLElement, options: any) => {
+        renderOptions.push(options);
+        return renderOptions.length + 6;
+      }),
+      execute: jasmine.createSpy('execute'),
+      reset: jasmine.createSpy('reset'),
+    };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'first-site-key';
+    component.size = 'invisible';
+    await initializeComponent();
+    component.error.subscribe(() => {
+      component.siteKey = 'second-site-key';
+      component.ngOnChanges({
+        siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+      });
+    });
+    const providerError = new Error('provider error');
+
+    const execution = component.execute();
+    renderOptions[0]['error-callback'](providerError);
+
+    await expectAsync(execution).toBeRejectedWith(providerError);
+    await (component as any).initializationTask;
   });
 
   it('maps the auto theme to a reCAPTCHA-compatible system theme', async () => {
@@ -238,9 +371,53 @@ describe('CaptchaComponent', () => {
 
     renderOptions['expired-callback']();
     renderOptions['timeout-callback']();
+    expect(renderOptions['error-callback']('turnstile-error')).toBeTrue();
     expect(component.expired.emit).toHaveBeenCalledTimes(1);
     expect(component.timedOut.emit).toHaveBeenCalledTimes(1);
     expect((window as any).turnstileOnload).toBeUndefined();
+  });
+
+  it('settles a Turnstile expiry before an expired subscriber reinitializes the component', async () => {
+    createComponent();
+    const renderOptions: any[] = [];
+    (window as any).turnstile = {
+      ready: (callback: () => void) => callback(),
+      render: jasmine.createSpy('render').and.callFake((_element: HTMLElement, options: any) => {
+        renderOptions.push(options);
+        return `widget-${renderOptions.length}`;
+      }),
+      execute: jasmine.createSpy('execute'),
+      remove: jasmine.createSpy('remove'),
+    };
+    component.type = 'turnstile';
+    component.siteKey = 'first-site-key';
+    component.execution = 'execute';
+    await initializeComponent();
+    component.expired.subscribe(() => {
+      component.siteKey = 'second-site-key';
+      component.ngOnChanges({
+        siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+      });
+    });
+
+    const execution = component.execute();
+    renderOptions[0]['expired-callback']();
+
+    await expectAsync(execution).toBeRejectedWithError('Turnstile token expired');
+    await (component as any).initializationTask;
+  });
+
+  it('rejects the unsupported invisible Turnstile size', async () => {
+    createComponent();
+    spyOn(component.error, 'emit');
+    component.type = 'turnstile';
+    component.siteKey = 'site-key';
+    component.size = 'invisible';
+
+    await initializeComponent();
+
+    expect(component.error.emit).toHaveBeenCalledOnceWith('Turnstile does not support size="invisible"');
+    expect(captchaService.loadScript).not.toHaveBeenCalled();
   });
 
   it('requires Alibaba Captcha 2.0 button and captchaVerifyCallback', async () => {
@@ -323,6 +500,136 @@ describe('CaptchaComponent', () => {
     expect(alibabaOnError).toHaveBeenCalledOnceWith('aliyun-error');
   });
 
+  it('does not send an old Alibaba biz result to a callback replaced during its output', async () => {
+    createComponent();
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+    const oldCallback = jasmine.createSpy('oldCallback');
+    const newCallback = jasmine.createSpy('newCallback');
+    component.type = 'alibaba';
+    component.sceneId = 'first-scene';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => ({ captchaResult: true });
+    component.onBizResultCallback = oldCallback;
+    await initializeComponent();
+    component.bizResult.subscribe(() => {
+      component.sceneId = 'second-scene';
+      component.onBizResultCallback = newCallback;
+      component.ngOnChanges({
+        sceneId: new SimpleChange('first-scene', 'second-scene', false),
+      });
+    });
+
+    initOptions.onBizResultCallback(true);
+
+    expect(oldCallback).not.toHaveBeenCalled();
+    expect(newCallback).not.toHaveBeenCalled();
+    await (component as any).initializationTask;
+  });
+
+  it('does not send an old Alibaba error to a callback replaced during its output', async () => {
+    createComponent();
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+    const oldCallback = jasmine.createSpy('oldCallback');
+    const newCallback = jasmine.createSpy('newCallback');
+    component.type = 'alibaba';
+    component.sceneId = 'first-scene';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => ({ captchaResult: true });
+    component.alibabaOnError = oldCallback;
+    await initializeComponent();
+    component.error.subscribe(() => {
+      component.sceneId = 'second-scene';
+      component.alibabaOnError = newCallback;
+      component.ngOnChanges({
+        sceneId: new SimpleChange('first-scene', 'second-scene', false),
+      });
+    });
+
+    initOptions.onError('provider-error');
+
+    expect(oldCallback).not.toHaveBeenCalled();
+    expect(newCallback).not.toHaveBeenCalled();
+    await (component as any).initializationTask;
+  });
+
+  it('destroys the active Alibaba instance before reinitializing', async () => {
+    createComponent();
+    const initOptions: any[] = [];
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions.push(options);
+    });
+    component.type = 'alibaba';
+    component.sceneId = 'first-scene';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => ({ captchaResult: true });
+    await initializeComponent();
+    const destroyCaptcha = jasmine.createSpy('destroyCaptcha');
+    initOptions[0].getInstance({ destroyCaptcha });
+
+    component.sceneId = 'second-scene';
+    component.ngOnChanges({
+      sceneId: new SimpleChange('first-scene', 'second-scene', false),
+    });
+    await (component as any).initializationTask;
+
+    expect(destroyCaptcha).toHaveBeenCalledTimes(1);
+    expect((window as any).initAliyunCaptcha).toHaveBeenCalledTimes(2);
+  });
+
+  it('destroys the active Alibaba instance when the component is destroyed', async () => {
+    createComponent();
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+    component.type = 'alibaba';
+    component.sceneId = 'scene-id';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => ({ captchaResult: true });
+    await initializeComponent();
+    const destroyCaptcha = jasmine.createSpy('destroyCaptcha');
+    initOptions.getInstance({ destroyCaptcha });
+
+    component.ngOnDestroy();
+
+    expect(destroyCaptcha).toHaveBeenCalledTimes(1);
+  });
+
+  it('destroys an Alibaba instance delivered by a stale initialization', async () => {
+    createComponent();
+    const initOptions: any[] = [];
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions.push(options);
+    });
+    component.type = 'alibaba';
+    component.sceneId = 'first-scene';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => ({ captchaResult: true });
+    await initializeComponent();
+    const staleGetInstance = initOptions[0].getInstance;
+
+    component.sceneId = 'second-scene';
+    component.ngOnChanges({
+      sceneId: new SimpleChange('first-scene', 'second-scene', false),
+    });
+    await (component as any).initializationTask;
+    const destroyCaptcha = jasmine.createSpy('destroyCaptcha');
+    staleGetInstance({ destroyCaptcha });
+
+    expect(destroyCaptcha).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects unsupported Alibaba float mode', async () => {
     createComponent();
     spyOn(component.error, 'emit');
@@ -338,6 +645,260 @@ describe('CaptchaComponent', () => {
 
     expect(component.error.emit).toHaveBeenCalledOnceWith('Alibaba Captcha 2.0 supports only "embed" or "popup" mode');
     expect(captchaService.loadScript).not.toHaveBeenCalled();
+  });
+
+  it('returns a failed Alibaba verification when an async result becomes stale', async () => {
+    createComponent();
+    spyOn(component.error, 'emit');
+    let resolveVerification!: (result: { captchaResult: boolean }) => void;
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+    component.type = 'alibaba';
+    component.sceneId = 'first-scene';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => new Promise(resolve => {
+      resolveVerification = resolve;
+    });
+    await initializeComponent();
+
+    const staleCallback = initOptions.captchaVerifyCallback;
+    const verification = staleCallback('captcha-param');
+    component.sceneId = 'second-scene';
+    component.ngOnChanges({
+      sceneId: new SimpleChange('first-scene', 'second-scene', false),
+    });
+    await (component as any).initializationTask;
+    resolveVerification({ captchaResult: true });
+
+    await expectAsync(verification).toBeResolvedTo({ captchaResult: false, bizResult: false });
+    expect(component.error.emit).not.toHaveBeenCalled();
+  });
+
+  it('suppresses an Alibaba verification error that becomes stale', async () => {
+    createComponent();
+    spyOn(component.error, 'emit');
+    let rejectVerification!: (error: unknown) => void;
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+    component.type = 'alibaba';
+    component.sceneId = 'first-scene';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = () => new Promise((_resolve, reject) => {
+      rejectVerification = reject;
+    });
+    await initializeComponent();
+
+    const staleCallback = initOptions.captchaVerifyCallback;
+    const verification = staleCallback('captcha-param');
+    component.sceneId = 'second-scene';
+    component.ngOnChanges({
+      sceneId: new SimpleChange('first-scene', 'second-scene', false),
+    });
+    await (component as any).initializationTask;
+    rejectVerification(new Error('stale backend failure'));
+
+    await expectAsync(verification).toBeResolvedTo({ captchaResult: false, bizResult: false });
+    expect(component.error.emit).not.toHaveBeenCalled();
+  });
+
+  it('does not verify Alibaba CAPTCHA after a resolved subscriber reinitializes the widget', async () => {
+    createComponent();
+    const verifyCallback = jasmine.createSpy('verifyCallback').and.returnValue({ captchaResult: true });
+    let initOptions: any;
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha').and.callFake((options: any) => {
+      initOptions = options;
+    });
+    component.type = 'alibaba';
+    component.sceneId = 'first-scene';
+    component.prefix = 'prefix';
+    component.button = '#login-button';
+    component.captchaVerifyCallback = verifyCallback;
+    await initializeComponent();
+
+    const staleVerifyCallback = initOptions.captchaVerifyCallback;
+    component.resolved.subscribe(() => {
+      component.sceneId = 'second-scene';
+      component.ngOnChanges({
+        sceneId: new SimpleChange('first-scene', 'second-scene', false),
+      });
+    });
+
+    await expectAsync(staleVerifyCallback('captcha-param')).toBeResolvedTo({
+      captchaResult: false,
+      bizResult: false,
+    });
+    await (component as any).initializationTask;
+    expect(verifyCallback).not.toHaveBeenCalled();
+  });
+
+  it('tears down and re-renders when provider inputs change', async () => {
+    createComponent();
+    spyOn(component.resolved, 'emit');
+    const renderOptions: any[] = [];
+    const render = jasmine.createSpy('render').and.callFake((_element: HTMLElement, options: any) => {
+      renderOptions.push(options);
+      return renderOptions.length + 6;
+    });
+    const reset = jasmine.createSpy('reset');
+    (window as any).grecaptcha = { render, reset };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'first-site-key';
+
+    await initializeComponent();
+
+    component.siteKey = 'second-site-key';
+    component.ngOnChanges({
+      siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+    });
+    await (component as any).initializationTask;
+
+    expect(reset).toHaveBeenCalledOnceWith(7);
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(render.calls.mostRecent().args[1]).toEqual(jasmine.objectContaining({
+      sitekey: 'second-site-key',
+    }));
+
+    renderOptions[0].callback('stale-token');
+    renderOptions[1].callback('fresh-token');
+    expect(component.resolved.emit).toHaveBeenCalledOnceWith('fresh-token');
+  });
+
+  it('does not re-render for callback-only input changes', async () => {
+    createComponent();
+    const render = jasmine.createSpy('render').and.returnValue(7);
+    const reset = jasmine.createSpy('reset');
+    (window as any).grecaptcha = { render, reset };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'site-key';
+    await initializeComponent();
+
+    const previousCallback = component.getInstance;
+    component.getInstance = jasmine.createSpy('getInstance');
+    component.ngOnChanges({
+      getInstance: new SimpleChange(previousCallback, component.getInstance, false),
+    });
+    await (component as any).initializationTask;
+
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('does not re-render Google reCAPTCHA for a page-locked language change', async () => {
+    createComponent();
+    const render = jasmine.createSpy('render').and.returnValue(7);
+    const reset = jasmine.createSpy('reset');
+    (window as any).grecaptcha = { render, reset };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'site-key';
+    component.language = 'en';
+    await initializeComponent();
+
+    component.language = 'zh-TW';
+    component.ngOnChanges({
+      language: new SimpleChange('en', 'zh-TW', false),
+    });
+    await (component as any).initializationTask;
+
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pending manual execution when inputs trigger reinitialization', async () => {
+    createComponent();
+    const render = jasmine.createSpy('render').and.returnValues(7, 8);
+    (window as any).grecaptcha = {
+      render,
+      execute: jasmine.createSpy('execute'),
+      reset: jasmine.createSpy('reset'),
+    };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'first-site-key';
+    component.size = 'invisible';
+    await initializeComponent();
+
+    const execution = component.execute();
+    component.siteKey = 'second-site-key';
+    component.ngOnChanges({
+      siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+    });
+
+    await expectAsync(execution).toBeRejectedWithError(
+      'Captcha component reinitialized before execution completed',
+    );
+    await (component as any).initializationTask;
+    expect(render).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a stale reCAPTCHA v2 thenable settle a newer execution', async () => {
+    createComponent();
+    spyOn(component.resolved, 'emit');
+    let resolveFirst!: (token: string) => void;
+    let resolveSecond!: (token: string) => void;
+    const firstResult = new Promise<string>(resolve => resolveFirst = resolve);
+    const secondResult = new Promise<string>(resolve => resolveSecond = resolve);
+    const render = jasmine.createSpy('render').and.returnValues(7, 8);
+    (window as any).grecaptcha = {
+      render,
+      execute: jasmine.createSpy('execute').and.returnValues(firstResult, secondResult),
+      reset: jasmine.createSpy('reset'),
+    };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'first-site-key';
+    component.size = 'invisible';
+    await initializeComponent();
+
+    const firstExecution = component.execute();
+    component.siteKey = 'second-site-key';
+    component.ngOnChanges({
+      siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+    });
+    await expectAsync(firstExecution).toBeRejectedWithError(
+      'Captcha component reinitialized before execution completed',
+    );
+    await (component as any).initializationTask;
+
+    const secondExecution = component.execute();
+    resolveFirst('stale-token');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(component.resolved.emit).not.toHaveBeenCalled();
+
+    resolveSecond('fresh-token');
+    await expectAsync(secondExecution).toBeResolvedTo('fresh-token');
+    expect(component.resolved.emit).toHaveBeenCalledOnceWith('fresh-token');
+  });
+
+  it('ignores stale provider initialization after inputs change', async () => {
+    createComponent();
+    let resolveFirstLoad!: () => void;
+    captchaService.loadScript.and.returnValues(
+      new Promise<void>(resolve => resolveFirstLoad = resolve),
+      Promise.resolve(),
+    );
+    const render = jasmine.createSpy('render').and.returnValue(8);
+    (window as any).grecaptcha = { render, reset: jasmine.createSpy('reset') };
+    component.type = 'recaptcha-v2';
+    component.siteKey = 'first-site-key';
+
+    const firstInitialization = initializeComponent();
+    component.siteKey = 'second-site-key';
+    component.ngOnChanges({
+      siteKey: new SimpleChange('first-site-key', 'second-site-key', false),
+    });
+    await (component as any).initializationTask;
+    resolveFirstLoad();
+    await firstInitialization;
+
+    expect(render).toHaveBeenCalledOnceWith(
+      jasmine.any(HTMLElement),
+      jasmine.objectContaining({ sitekey: 'second-site-key' }),
+    );
   });
 
   it('does not render after being destroyed while a provider script is loading', async () => {
@@ -958,6 +1519,14 @@ describe('CaptchaService', () => {
     expect((window as any).turnstile.render).toHaveBeenCalledTimes(2);
     expect((window as any).turnstile.remove).toHaveBeenCalledWith('widget-2');
     expect((window as any).turnstile.remove).toHaveBeenCalledTimes(2);
+
+    const errorPromise = service.executeTurnstile('site-key', 'submit', 'payload', customElement);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(renderOptions['error-callback']('turnstile-error')).toBeTrue();
+    await expectAsync(errorPromise).toBeRejectedWith('turnstile-error');
+    expect((window as any).turnstile.remove).toHaveBeenCalledWith('widget-3');
+    expect((window as any).turnstile.remove).toHaveBeenCalledTimes(3);
   });
 
   it('initializes Alibaba Captcha 2.0 through the service', async () => {
@@ -1027,5 +1596,55 @@ describe('CaptchaService', () => {
     expect(initOptions.language).toBe('tw');
     expect(typeof initOptions.onBizResultCallback).toBe('function');
     expect(typeof initOptions.getInstance).toBe('function');
+  });
+
+  it('runtime-validates a string-valued Alibaba service region', async () => {
+    const service = new CaptchaService(document, 'browser');
+
+    await expectAsync(service.executeAlibabaCaptcha('scene-id', {
+      element: '#captcha-element',
+      button: '#submit-button',
+      captchaVerifyCallback: () => ({ captchaResult: true }),
+      prefix: 'prefix',
+      region: 'invalid-region',
+    })).toBeRejectedWithError('Alibaba Captcha 2.0 region must be "cn" or "sgp"');
+  });
+
+  it('rejects incompatible Alibaba SDK configuration after the script is shared', async () => {
+    const service = new CaptchaService(document, 'browser');
+    spyOn(service, 'loadScript').and.resolveTo();
+    (window as any).initAliyunCaptcha = jasmine.createSpy('initAliyunCaptcha');
+    const baseOptions = {
+      element: '#captcha-element',
+      button: '#submit-button',
+      captchaVerifyCallback: () => ({ captchaResult: true }),
+      prefix: 'prefix',
+    };
+
+    await service.executeAlibabaCaptcha('scene-id', baseOptions);
+
+    await expectAsync(service.executeAlibabaCaptcha('scene-id', {
+      ...baseOptions,
+      region: 'sgp',
+      prefix: 'other-prefix',
+    })).toBeRejectedWithError(
+      'Alibaba CAPTCHA SDK is already configured with region="cn" and prefix="prefix"; '
+      + 'cannot request region="sgp" and prefix="other-prefix"',
+    );
+    expect(service.loadScript).toHaveBeenCalledTimes(1);
+    expect((window as any).initAliyunCaptcha).toHaveBeenCalledTimes(1);
+  });
+
+  it('detects in-place mutation of the Alibaba global configuration', async () => {
+    const service = new CaptchaService(document, 'browser');
+    spyOn(service, 'loadScript').and.resolveTo();
+
+    await service.loadAlibabaScript('cn', 'prefix');
+    (window as any).AliyunCaptchaConfig.region = 'sgp';
+
+    await expectAsync(service.loadAlibabaScript('sgp', 'prefix')).toBeRejectedWithError(
+      'Alibaba CAPTCHA global configuration changed after the SDK was configured',
+    );
+    expect(service.loadScript).toHaveBeenCalledTimes(1);
   });
 });

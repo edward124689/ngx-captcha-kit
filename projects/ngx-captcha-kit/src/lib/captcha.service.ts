@@ -2,6 +2,7 @@ import { DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { Injectable, Inject, OnDestroy, PLATFORM_ID } from '@angular/core';
 
 export type AlibabaCaptchaMode = 'embed' | 'popup';
+export type AlibabaCaptchaRegion = 'cn' | 'sgp';
 
 export interface AlibabaCaptchaVerifyResult {
   captchaResult: boolean;
@@ -11,6 +12,8 @@ export interface AlibabaCaptchaVerifyResult {
 export type AlibabaCaptchaVerifyCallback = (captchaVerifyParam: string) => AlibabaCaptchaVerifyResult | Promise<AlibabaCaptchaVerifyResult>;
 
 export interface AlibabaCaptchaInstance {
+  refresh?: () => void;
+  destroyCaptcha?: () => void;
   [key: string]: unknown;
 }
 
@@ -57,7 +60,7 @@ interface CaptchaWindow extends Window {
   grecaptcha?: RecaptchaApi;
   turnstile?: TurnstileApi;
   AliyunCaptchaConfig?: {
-    region: string;
+    region: AlibabaCaptchaRegion;
     prefix: string;
   };
   initAliyunCaptcha?: (options: Record<string, unknown>) => void;
@@ -83,15 +86,19 @@ export class CaptchaService implements OnDestroy {
   private static readonly SCRIPT_LOAD_TIMEOUT_MS = 15000;
   private static callbackOwners = new WeakMap<Window, Map<string, symbol>>();
   private static failedScripts = new WeakSet<HTMLScriptElement>();
+  private static alibabaConfigurations = new WeakMap<Window, Readonly<{ region: AlibabaCaptchaRegion; prefix: string }>>();
 
   private readyPromises = new Map<string, ScriptLoadEntry>();
   private recaptchaV3Widgets = new Map<string, RecaptchaV3Widget>();
   private nextContainerId = 0;
+  private doc: Document;
 
   constructor(
-    @Inject(DOCUMENT) private doc: Document,
+    @Inject(DOCUMENT) doc: any,
     @Inject(PLATFORM_ID) private platformId: Object
-  ) {}
+  ) {
+    this.doc = doc as Document;
+  }
 
   loadScript(url: string, onloadCallbackName?: string, language?: string, asyncLoad: boolean = true): Promise<void> {
     let modifiedUrl = url;
@@ -315,7 +322,10 @@ export class CaptchaService implements OnDestroy {
           action: action,
           cData: cData,
           callback: (token: string) => resolveOnce(token),
-          'error-callback': (error: unknown) => rejectOnce(error),
+          'error-callback': (error: unknown) => {
+            rejectOnce(error);
+            return true;
+          },
           'expired-callback': () => rejectOnce(new Error('Turnstile token expired')),
           'timeout-callback': () => rejectOnce(new Error('Turnstile challenge timed out')),
         });
@@ -333,12 +343,12 @@ export class CaptchaService implements OnDestroy {
       throw new Error('Alibaba Captcha 2.0 supports only "embed" or "popup" mode');
     }
 
-    browserWindow.AliyunCaptchaConfig = {
-      region: options.region || 'cn',
-      prefix: options.prefix,
-    };
+    const region = options.region ?? 'cn';
+    if (region !== 'cn' && region !== 'sgp') {
+      throw new Error('Alibaba Captcha 2.0 region must be "cn" or "sgp"');
+    }
 
-    await this.loadScript('https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js');
+    await this.loadAlibabaScript(region, options.prefix);
     const initAliyunCaptcha = browserWindow.initAliyunCaptcha;
     if (typeof initAliyunCaptcha !== 'function') {
       throw new Error('AliyunCaptcha script loaded but initAliyunCaptcha is not available');
@@ -361,6 +371,63 @@ export class CaptchaService implements OnDestroy {
       onError: options.onError,
       captchaLogoImg: options.captchaLogoImg,
     });
+  }
+
+  async loadAlibabaScript(region: AlibabaCaptchaRegion, prefix: string): Promise<void> {
+    if (region !== 'cn' && region !== 'sgp') {
+      throw new Error('Alibaba Captcha 2.0 region must be "cn" or "sgp"');
+    }
+    if (!prefix) {
+      throw new Error('Alibaba Captcha 2.0 prefix is required');
+    }
+
+    const browserWindow = this.getBrowserWindow('Alibaba Captcha 2.0');
+    let trackedConfiguration = CaptchaService.alibabaConfigurations.get(browserWindow);
+    const globalConfiguration = browserWindow.AliyunCaptchaConfig;
+    const providerAvailable = typeof browserWindow.initAliyunCaptcha === 'function';
+
+    if (trackedConfiguration && !globalConfiguration && !providerAvailable) {
+      CaptchaService.alibabaConfigurations.delete(browserWindow);
+      trackedConfiguration = undefined;
+    }
+
+    if (trackedConfiguration && globalConfiguration
+      && !this.isSameAlibabaConfiguration(trackedConfiguration, globalConfiguration)) {
+      throw new Error('Alibaba CAPTCHA global configuration changed after the SDK was configured');
+    }
+
+    const currentConfiguration = trackedConfiguration || globalConfiguration;
+    const requestedConfiguration = { region, prefix };
+    if (currentConfiguration && !this.isSameAlibabaConfiguration(currentConfiguration, requestedConfiguration)) {
+      throw new Error(
+        `Alibaba CAPTCHA SDK is already configured with region="${currentConfiguration.region}" `
+        + `and prefix="${currentConfiguration.prefix}"; cannot request region="${region}" and prefix="${prefix}"`,
+      );
+    }
+
+    const ownsConfiguration = !currentConfiguration;
+    CaptchaService.alibabaConfigurations.set(browserWindow, Object.freeze({ ...requestedConfiguration }));
+    browserWindow.AliyunCaptchaConfig = { ...requestedConfiguration };
+
+    try {
+      await this.loadScript('https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js');
+    } catch (error) {
+      if (ownsConfiguration && typeof browserWindow.initAliyunCaptcha !== 'function') {
+        CaptchaService.alibabaConfigurations.delete(browserWindow);
+        if (browserWindow.AliyunCaptchaConfig
+          && this.isSameAlibabaConfiguration(browserWindow.AliyunCaptchaConfig, requestedConfiguration)) {
+          delete browserWindow.AliyunCaptchaConfig;
+        }
+      }
+      throw error;
+    }
+  }
+
+  private isSameAlibabaConfiguration(
+    current: { region: AlibabaCaptchaRegion; prefix: string },
+    requested: { region: AlibabaCaptchaRegion; prefix: string },
+  ): boolean {
+    return current.region === requested.region && current.prefix === requested.prefix;
   }
 
   private normalizeAlibabaLanguage(language: string | undefined): string {

@@ -30,6 +30,7 @@ An Angular library that provides a unified integration for multiple CAPTCHA serv
   - Cloudflare Turnstile (invisible or interactive widget with score-based verification).
   - Alibaba Cloud Captcha 2.0 (no-trace validation, one-click pass, slider validation, jigsaw validation, and image restoration via embed/popup modes).
 - **Dynamic Script Loading**: Loads each provider script on-demand, reuses existing provider globals, and keeps component rendering SSR-safe.
+- **Lifecycle-safe Inputs**: Rebuilds the active widget when provider inputs change and prevents stale asynchronous loads from rendering.
 - **Language Support**: Customizable language via input (e.g., 'en', 'zh-TW', 'auto').
 - **Extensible Design**: Easily add new CAPTCHA providers by extending the service and component.
 - **Angular 22 Compatibility**: Supports modern Angular APIs, zoneless apps, and avoids unnecessary Zone.js dependencies.
@@ -292,6 +293,8 @@ All providers support language customization via the `language` input (e.g., 'en
 - Direct service execution on the server rejects with a descriptive browser-only error instead of touching browser globals.
 - Google reCAPTCHA uses one explicit-render script so v2, v3, and multiple site keys can share a page. The first requested Google language applies to all reCAPTCHA widgets on that page; direct `loadScript()` calls with an incompatible Google `render` configuration reject instead of loading a second SDK copy.
 - Dynamic script loads settle when either the provider callback or the script `load` event fires, and reject after 15 seconds if a newly appended script never settles. A pending load must keep the same callback choice for the same script; different concurrent scripts must use distinct callback names.
+- Alibaba Cloud's `region` and `prefix` configuration is shared by its page-level SDK. Reusing the SDK with an incompatible configuration rejects instead of silently switching accounts or control planes.
+- Changing component inputs tears down and recreates the active widget. Any pending manual `execute()` promise rejects during reinitialization. Google language-only changes do not recreate the widget because the first reCAPTCHA language is locked at page level.
 - Quotas: Monitor provider limits (e.g., Google 1M/month free).
 - For v3/Turnstile: Generate tokens on actions to avoid expiration.
 
@@ -303,6 +306,7 @@ All providers support language customization via the `language` input (e.g., 'en
 - `executeRecaptchaV3(siteKey: string, action: string, language?: string): Promise<string>`
 - `executeTurnstile(siteKey: string, action?: string, cData?: string, element?: string | HTMLElement): Promise<string>` (removes its temporary widget after success or failure)
 - `executeAlibabaCaptcha(sceneId: string, options: AlibabaCaptchaOptions): Promise<void>`
+- `loadAlibabaScript(region: 'cn' | 'sgp', prefix: string): Promise<void>` (loads the shared SDK and rejects incompatible page-level configuration)
 
 ### CaptchaComponent
 
@@ -311,11 +315,11 @@ All providers support language customization via the `language` input (e.g., 'en
   - `siteKey?: string` (for Google/Cloudflare)
   - `sceneId?: string` (for Alibaba)
   - `prefix?: string` (for Alibaba Captcha 2.0)
-  - `region?: string` (for Alibaba Captcha 2.0, defaults to `cn`)
+  - `region?: string` (for Alibaba Captcha 2.0; runtime accepts `cn` or `sgp` and defaults to `cn`)
   - `action?: string`
   - `theme?: 'light' | 'dark' | 'auto'` (`auto` follows the system theme for reCAPTCHA and is passed through to Turnstile)
   - `size?: 'normal' | 'compact' | 'invisible' | 'flexible'` (`flexible` is for Turnstile; `invisible` is for reCAPTCHA v2)
-  - `mode?: 'embed' | 'popup'` (for Alibaba Captcha 2.0)
+  - `mode?: 'embed' | 'popup' | 'float'` (`float` remains type-compatible with 22.1 but Alibaba Captcha 2.0 accepts only `embed` or `popup` at runtime)
   - `cData?: string` (Turnstile)
   - `language?: string` (defaults to 'auto')
   - `execution?: 'render' | 'execute'` (Turnstile, defaults to `render`)
@@ -323,7 +327,7 @@ All providers support language customization via the `language` input (e.g., 'en
   - `button?: string` (Alibaba Captcha 2.0 trigger selector)
   - `captchaVerifyCallback?: AlibabaCaptchaVerifyCallback`
   - `onBizResultCallback?: (bizResult: boolean | undefined) => void`
-  - `getInstance?: (instance: any) => void`
+  - `getInstance?: (instance: any) => void` (`AlibabaCaptchaInstance` is exported with `refresh()` and `destroyCaptcha()` for consumers that want stricter local typing)
   - `slideStyle?: { width?: number; height?: number }`
   - `immediate?: boolean`
   - `timeout?: number`
@@ -351,7 +355,7 @@ Fork the repo, create a branch, and submit a PR.
 - Requirements: Node.js `^22.22.3`, `^24.15.0`, or `>=26.0.0`.
 - Setup: `npm install`, then `npm run build`.
 - Testing: Run `npm run test:ci`; use `npm run start` for the test app.
-- Full local CI check: `npm run ci`.
+- Full local CI check: `npm run ci` (builds and dry-runs the publishable package before running tests and audits).
 - Issues: Report on GitHub.
 
 ## License
